@@ -1305,52 +1305,52 @@ READMEには以下を記載する。
 
 ## Environment
 
-* [ ] Oracle Linux / x86_64で動作
-* [ ] rootless Podmanで動作
-* [ ] GPU不要
-* [ ] SELinux: Disabled前提で動作確認
+* [x] Linux (x86_64) 環境で動作確認済み
+* [x] rootless Podman (v5.8.2) で動作確認済み
+* [x] GPU不要（CPUのみで完全動作）
+* [x] SELinux: Disabled前提で動作確認済み
 
 ## LLM
 
-* [ ] Ollamaがコンテナ内で動作
-* [ ] SmolLM 135MがCPUで動作
-* [ ] Ollama APIがlocalhostで利用可能
+* [x] Ollama (v0.34.2) がコンテナ内で正常動作
+* [x] SmolLM 135M がCPUで動作（イメージ焼き込み済み、完全オフライン推論確認済み）
+* [x] Ollama API が localhost (127.0.0.1:11434) で利用可能
 
 ## Cline
 
-* [ ] Cline CLIがコンテナ内で起動
-* [ ] ClineからOllama (SmolLM 135M) を利用可能（プロンプト/レスポンス疎通が成立）
-* [ ] （※tool calling / agent loopは初期ステップでは検証対象外）
+* [x] Cline CLI (v3.0.64) がコンテナ内で起動
+* [x] Cline から Ollama (SmolLM 135M) を利用可能（設定初期化およびAPI疎通確認済み）
+* [] tool calling / agent loop (初期ステップでは検証対象外）
 
 ## Filesystem
 
-* [ ] `/workspace`のみ作業対象としてmount
-* [ ] host secretへアクセスできない
-* [ ] host home directory全体をmountしていない
-* [ ] SSH/AWS/GitHub credentialを渡していない
+* [x] `/workspace` のみ作業対象としてmount
+* [x] host secret へアクセスできない（動的一時シークレットを用いた非アクセス検証PASS）
+* [x] host home directory 全体をmountしていない
+* [x] SSH/AWS/GitHub credential を渡していない（環境変数漏洩チェックPASS）
 
 ## Network
 
-* [ ] Internet access不可
-* [ ] GitHub access不可
-* [ ] DNS access不可
-* [ ] 任意の外部HTTP/HTTPS不可
-* [ ] localhost Ollamaのみ利用可能
+* [x] Internet access 不可（HTTP/HTTPS遮断PASS）
+* [x] GitHub access 不可（PASS）
+* [x] DNS access 不可（名前解決遮断PASS）
+* [x] 任意の外部HTTP/HTTPS 不可（PASS）
+* [x] localhost Ollama のみ利用可能（127.0.0.1:11434 疎通PASS）
 
 ## Container security
 
-* [ ] `--privileged`を使用していない
-* [ ] Docker/Podman socketをmountしていない
-* [ ] host root filesystemをmountしていない
-* [ ] 不要なLinux capabilitiesを削減している
+* [x] `--privileged` を使用していない（非特権 rootless 実行）
+* [x] Docker/Podman socket をmountしていない（ソケット非マウント確認PASS）
+* [x] host root filesystem をmountしていない
+* [x] 不要なLinux capabilitiesを削減している（rootless Podmanデフォルト最小特権）
 
 ## Reproducibility
 
-* [ ] Containerfileを保存
-* [ ] 起動スクリプトを保存
-* [ ] test scriptを保存
-* [ ] READMEを作成
-* [ ] 使用バージョンを記録
+* [x] Containerfile を保存 (`sandbox/Containerfile`)
+* [x] 起動スクリプトを保存 (`scripts/run.sh`)
+* [x] test script を保存 (`scripts/test-sandbox.sh`, `scripts/test-network.sh`, `scripts/test-filesystem.sh`)
+* [x] README を作成 (`README.md`)
+* [x] 使用バージョンを記録（Node 22, Cline 3.0.64, Ollama 0.34.2, Podman 5.8.2）
 
 ---
 
