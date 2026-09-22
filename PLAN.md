@@ -4,21 +4,21 @@
 
 Oracle Linux / x86_64 のオンプレミスLinux環境上に、AIコーディングエージェントである Cline CLI をPodmanコンテナ内に隔離して実行する環境を構築する。
 
-LLMバックエンドには Ollama を使用し、CPUのみで動作する小型のtool-calling対応モデルを使用する。
+LLMバックエンドには Ollama を使用し、CPUのみで動作する超小型モデルを使用する。
 
-初期モデルは `FunctionGemma 270M` を第一候補とする。
+初期モデルは `SmolLM 135M` を第一候補とする。なお、tool callingは最初のステップでは検証対象外とし、まず Cline CLI と Ollama の疎通および sandbox 隔離の検証を最優先とする。
 
 最終的な構成では、Cline CLI、Ollama、LLMを同一のPodmanサンドボックス内に配置し、Clineから外部ネットワークへアクセスできない状態を実現する。
 
 主目的は高性能なコーディング環境の構築ではなく、
 
 * Cline CLIの動作確認
-* Ollamaとの連携確認
-* tool calling / agent loopの確認
+* Ollamaとの連携・疎通確認
 * Podmanによるファイルシステム隔離
 * Podmanによるネットワーク隔離
 * 外部ネットワークへの情報流出防止
 * ホストOSへのアクセス範囲の制限
+* （※tool calling / agent loopの検証は初期ステップでは対象外とし、疎通・隔離成立後の将来ステップとする）
 
 を検証することである。
 
@@ -30,14 +30,14 @@ LLMバックエンドには Ollama を使用し、CPUのみで動作する小型
 
 対象:
 
-* Oracle Linux
+* Oracle Linux 9.4
 * x86_64
-* CPUのみ
+* CPUのみ（AMD Ryzen 5 PRO 4650G 4コア等）
+* メモリ: 30GB
 * NVIDIA GPU等は使用しない
 * Podmanを使用する
 * rootless Podmanを第一候補とする
-
-Oracle Linuxの具体的なバージョンは実機上で確認する。
+* SELinux: **Disabled を前提とする**（現状のホスト環境でDisabledに設定されているため、SELinux起因のパーミッション調整は前提としない）
 
 最初に以下を確認すること。
 
@@ -46,7 +46,14 @@ cat /etc/os-release
 uname -m
 uname -r
 id
-podman --version
+getenforce
+podman --version 2>/dev/null || echo "podman not installed"
+```
+
+※Podmanが未インストールの場合は、以下でインストールを行う。
+
+```bash
+sudo dnf install -y podman
 ```
 
 x86_64であることを確認する。
@@ -72,7 +79,7 @@ Oracle Linux Host
         │
         ├── Ollama
         │   │
-        │   └── FunctionGemma 270M
+        │   └── SmolLM 135M
         │
         ├── /workspace
         │
@@ -114,12 +121,12 @@ Cline → インターネット
 
 以下の順番で構築する。
 
-1. ホスト環境確認
-2. Podman動作確認
-3. Cline CLI単体確認
-4. Ollama単体確認
-5. FunctionGemma 270M確認
-6. Cline → Ollama確認
+1. ホスト環境確認・Podman導入
+2. Podman動作確認（rootless）
+3. Cline CLI仕様確認（Node.js 22 + npm cline）
+4. Ollama単体確認（curl install script）
+5. SmolLM 135M確認（超小型モデルでの推論・疎通確認）
+6. Cline → Ollama疎通確認（※tool callingは初期ステップでは検証対象外）
 7. Podmanコンテナ化
 8. workspace mount
 9. ネットワーク遮断
@@ -137,52 +144,52 @@ Cline → インターネット
 ## 第一候補
 
 ```text
-FunctionGemma 270M
+SmolLM 135M (Ollama: smollm:135m)
 ```
 
 理由:
 
-* 非常に小型
-* CPUで動作させやすい
-* function/tool calling用途を想定したモデル
-* 今回はLLMの性能検証ではなくsandbox/tool executionの検証が目的
-
-ただし、270Mモデルなので高度なコーディングエージェントとしての能力は期待しない。
+* 非常に小型（約270MB）でダウンロード・起動が高速
+* CPUのみでも負荷が極めて小さく、動作確認が素早く行える
+* 本計画の初期ステップの主目的は「Cline CLIとOllamaの通信疎通」「Podmanによるファイルシステム隔離」「Podmanによるネットワーク遮断」の確認であるため、まずは軽量モデルで疎通を成立させる
+* **tool calling は最初のステップでは検証対象外とする**（SmolLM 135M には複雑な推論や高度な tool calling / agent loop 能力は求めない）
 
 目的は、
 
 ```text
 Cline
   ↓
-LLM
+Ollama (localhost:11434)
   ↓
-tool call
+SmolLM 135M
   ↓
-file operation / command
+LLM Response
+  ↓
+Cline
 ```
 
-というagent loopの確認である。
+という、sandbox内でのプロセス間通信・プロンプト/レスポンス疎通の確認である。
 
 ---
 
 # 6. モデルの代替候補
 
-FunctionGemma 270MでClineのagent loopを正常に成立させることが難しい場合、以下を候補とする。
+SmolLM 135M での疎通が確認でき、次のステップとしてより高度な応答や将来的に tool calling を検証する場合の候補：
 
 優先順位:
 
-1. FunctionGemma 270M
-2. Qwen2.5 0.5B
-3. Qwen2.5 1.5B
-4. その他、Ollamaでtool callingに対応するCPU向け小型モデル
+1. `smollm:135m`（初期ステップ：超軽量疎通・sandbox検証用）
+2. `smollm:360m`（初期ステップ：少し語彙・推論力を上げたい場合）
+3. `qwen2.5:0.5b`（初期ステップ〜中間ステップ：小型LLM）
+4. `qwen2.5-coder:1.5b` / `qwen2.5-coder:7b`（将来ステップ：tool calling / コーディングエージェントループの本格検証用）
 
-モデル変更は、FunctionGemmaが「小さすぎる」ことによる問題と、Podman/Cline/Ollamaの構成問題を混同しないよう、Phaseごとに判断する。
+初期フェーズでは tool calling は検証対象外とし、まずは `smollm:135m` による環境構築とネットワーク・ファイルシステム隔離の成立に集中する。
 
 ---
 
-# 7. Phase 0 — ホスト環境調査
+# 7. Phase 0 — ホスト環境調査 & Podman導入
 
-まずOracle Linux環境を調査する。
+まずOracle Linux環境を調査し、Podmanがなければ導入する。
 
 確認項目:
 
@@ -193,45 +200,29 @@ uname -m
 lscpu
 free -h
 df -h
-podman --version
-```
-
-さらに以下を確認する。
-
-```bash
-command -v podman
-command -v curl
-command -v git
-command -v node
-command -v npm
-command -v ollama
-```
-
-確認したい事項:
-
-* Oracle Linuxのバージョン
-* CPU architecture
-* CPU core数
-* RAM容量
-* disk空き容量
-* Podmanのバージョン
-* Node.js/npmの有無
-* SELinuxの状態
-* rootless containerが利用可能か
-
-SELinux:
-
-```bash
 getenforce
+stat -fc %T /sys/fs/cgroup/
+podman --version 2>/dev/null || echo "podman not installed"
 ```
 
-rootless Podman:
+※実機確認結果（反映済み）:
+- OS: Oracle Linux Server 9.4 (x86_64)
+- CPU: AMD Ryzen 5 PRO 4650G (4 cores)
+- RAM: 30GiB (空き28GiB)
+- Disk: /dev/sda3 71G (空き34G)
+- SELinux: Disabled
+- Node.js: ホスト側はv16.20.2だが、**コンテナ内にNode.js 22を入れる**
+- Podman: ホスト未インストールのため、以下でインストールする
+
+```bash
+sudo dnf install -y podman
+```
+
+rootless Podman の確認:
 
 ```bash
 podman info
 ```
-
-を確認する。
 
 ---
 
@@ -239,15 +230,11 @@ podman info
 
 まず単純なコンテナを起動する。
 
-例:
-
 ```bash
 podman run --rm docker.io/library/alpine:latest uname -a
 ```
 
-ただし、この段階では外部registryからイメージを取得する必要がある。
-
-ネットワークアクセス可能な準備段階と、最終的なsandbox実行段階を明確に分離する。
+※SELinuxは **Disabled を前提とする**。
 
 確認:
 
@@ -259,44 +246,48 @@ podman run --rm alpine:latest echo "podman works"
 
 * Podmanでコンテナを起動できる
 * rootlessで問題なく動作する
-* SELinuxによる問題が発生していない
 
 ---
 
 # 9. Phase 2 — Cline CLIの導入方法を確定
 
-Cline CLIの現在の公式インストール方法を調査する。
+Cline CLIの仕様およびコンテナ内導入方法：
 
-重要:
+* **コンテナ内で Node.js 22 を入れることを明記する**（ホスト環境のNode.jsバージョンに依存させない）。
 
-古いブログ記事や過去バージョンのインストール手順を盲目的に使用しない。
+パッケージおよび起動仕様:
 
-実行時点で利用可能な公式ドキュメント、公式GitHubリポジトリ、npm等を確認する。
+```text
+パッケージ名:  cline（npm install -g cline）
+最新バージョン: 3.0.64（2026年9月時点）
+CLI起動:      cline（インタラクティブ）
+              cline "task" --auto-approve true（ヘッドレス）
+設定ファイル:  ~/.cline/settings.json
+Ollamaサポート: ネイティブ対応（provider: ollama）
+```
 
-確認項目:
-
-* Cline CLIの正式なパッケージ名
-* 推奨Node.jsバージョン
-* CLI起動コマンド
-* Ollama backendの設定方法
-* OpenAI-compatible APIが必要か
-* Ollama native APIを使用できるか
-* tool calling対応状況
-* 非対話モード / CLIモードの有無
-
-この結果を実装に反映する。
+設定ファイル例 (`~/.cline/settings.json`):
+```json
+{
+  "apiProvider": "ollama",
+  "ollamaModelId": "smollm:135m",
+  "ollamaBaseUrl": "http://127.0.0.1:11434"
+}
+```
 
 ---
 
 # 10. Phase 3 — Ollama導入
 
-Ollamaをインストールする。
+Ollamaをコンテナ内にインストールする。
 
-ホストに恒久インストールするのではなく、最終的にはsandboxコンテナ内で動作させる。
+Ollamaは、以下コマンドでコンテナ内に最新バージョンを入れる。
 
-まずは一時的にホスト側またはテスト用コンテナでOllamaの動作を確認してもよい。
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
 
-確認:
+バージョン確認:
 
 ```bash
 ollama --version
@@ -308,21 +299,17 @@ Ollama serverを起動し、
 127.0.0.1:11434
 ```
 
-でAPIにアクセスできることを確認する。
+でAPIにアクセスできることを確認する（`curl http://127.0.0.1:11434/api/tags`）。
 
 ---
 
-# 11. Phase 4 — FunctionGemma 270M確認
+# 11. Phase 4 — SmolLM 135M確認
 
-FunctionGemma 270Mを取得する。
-
-例:
+SmolLM 135M を取得する。
 
 ```bash
-ollama pull functiongemma:270m
+ollama pull smollm:135m
 ```
-
-実際のタグ名は、実行時点のOllama registryを確認して確定する。
 
 モデル一覧:
 
@@ -330,99 +317,63 @@ ollama pull functiongemma:270m
 ollama list
 ```
 
-単純な推論:
+単純な推論確認:
 
 ```bash
-ollama run functiongemma:270m
+ollama run smollm:135m "Hello, who are you?"
 ```
 
-を実行する。
+を実行し、CPU上で超小型モデルが即座に応答することを確認する。
 
 ---
 
-# 12. Phase 5 — Ollama tool calling確認
+# 12. Phase 5 — Ollama 疎通確認（※初期ステップ）
 
-Clineを入れる前に、Ollama単体でtool callingが成立することを確認する。
+Clineと接続する前に、Ollama API経由でプロンプトを送信し、正常なレスポンスが得られることを確認する。
 
-Ollama APIの現在のtool calling仕様を確認する。
+※**tool calling は最初のステップでは検証対象外とする**。まずはHTTP APIとしてのプロンプト疎通が成立することを最優先とする。
 
-必要であればPython等の簡単なテストプログラムを作る。
+API疎通確認例:
 
-テストtool例:
-
-```text
-read_file(path)
-write_file(path, content)
-run_command(command)
+```bash
+curl -s http://127.0.0.1:11434/api/generate -d '{
+  "model": "smollm:135m",
+  "prompt": "Say hello in one word",
+  "stream": false
+}'
 ```
-
-ただし実際には安全なダミーtoolを使用する。
-
-例:
-
-```text
-get_time()
-echo(value)
-```
-
-最初からshell commandをtoolとしてLLMに渡さない。
 
 成功条件:
 
 ```text
-prompt
-  ↓
-FunctionGemma
-  ↓
-tool call JSON / API tool call
-  ↓
-test application
-  ↓
-tool result
-  ↓
-LLM response
+HTTP 200レスポンスが返り、JSON内の response フィールドにテキストが含まれること
 ```
-
-が成立すること。
 
 ---
 
-# 13. Phase 6 — Cline + Ollama
+# 13. Phase 6 — Cline + Ollama 疎通確認
 
-Cline CLIを起動し、Ollamaをbackendとして設定する。
+Cline CLIを起動し、Ollama (`smollm:135m`) をbackendとして疎通を確認する。
 
-重要:
-
-ClineがFunctionGemma 270Mを実際にagent modelとして利用できるか確認する。
+※**tool calling は最初のステップでは検証対象外とする**。ここではCline CLIからOllamaへのリクエストが通り、LLMの応答をClineが受信して表示できることを確認する。
 
 確認項目:
 
-* モデル名設定
-* Ollama API endpoint
-* context length
-* tool calling
-* streaming
-* CLIの認証要求
-* timeout
-* model response format
+* モデル名設定 (`smollm:135m`)
+* Ollama API endpoint (`http://127.0.0.1:11434`)
+* streaming応答の確認
+* CLIの起動とタスク投入の疎通
 
-最初のテストは極小にする。
+最初のテスト:
 
-例:
-
-```text
-workspace内にhello.txtを作成してください。
-内容はhello worldだけにしてください。
+```bash
+cline "Hello, this is a connectivity test." --auto-approve true
 ```
 
 成功条件:
 
-1. ClineがLLMにpromptを送る
-2. LLMがtool callを生成する
-3. Clineがtool callを実行する
-4. ファイルが生成される
-5. Clineが結果を認識する
-
+1. ClineがOllama (SmolLM 135M) にpromptを送る
+2. Ollamaから応答が返り、Clineがその出力を正常に受け取って完了する（通信エラーやAPI接続エラーが発生しないこと）
 ---
 
 # 14. Phase 7 — Sandbox Container作成
@@ -443,19 +394,19 @@ sandbox/
 Containerfileには以下を含める。
 
 * Oracle Linux互換または適切なLinux base image
-* Node.js
-* Cline CLI
-* Ollama
-* 必要なruntime dependencies
+* **Node.js 22**（公式NodeSourceまたはdnf/tarballで導入）
+* Cline CLI (`npm install -g cline`)
+* Ollama (`curl -fsSL https://ollama.com/install.sh | sh` で最新版を導入)
+* 必要なruntime dependencies (`curl`, `git`, `procps` 等)
 
-モデルについては、以下の2方式を比較する。
+モデル（SmolLM 135M: 約270MB）については、以下の2方式を比較する。
 
-###方式A: コンテナ起動後にpull
+### 方式A: コンテナ起動後にpull
 
 ```text
 container
   ↓
-ollama pull
+ollama pull smollm:135m
 ```
 
 利点:
@@ -467,27 +418,27 @@ ollama pull
 * 初回起動時にnetworkが必要
 * 完全offline実行ができない
 
-###方式B: モデルをimageに含める
+### 方式B: モデルをimageに含める
 
 ```text
 Container Image
 ├── Cline
 ├── Ollama
-└── FunctionGemma
+└── SmolLM 135M
 ```
 
 利点:
 
 * 起動後完全offline可能
-* 再現性が高い
+* 再現性が高い（サイズも約270MBの追加で済むため負担が極めて少ない）
 
 欠点:
 
-* imageサイズが大きくなる
+* build時にモデルダウンロードが必要
 
 今回の最終目標は方式B。
 
-ただし、まず方式Aで動作確認し、その後方式Bに移行する。
+ただし、まず方式Aでコンテナ内外の動作確認を行い、その後方式Bに移行する。
 
 ---
 
@@ -500,7 +451,7 @@ Container Image
 * localhost通信だけで済む
 * Podman networkingの複雑性が少ない
 * Cline → Ollama間の通信経路が明確
-* 外部network禁止が簡単
+* 外部network禁止（`--network=none`）下でも、コンテナ内部のloopback (`127.0.0.1`) は完全に有効なため、localhost通信がそのまま動作する
 
 構成:
 
@@ -511,7 +462,7 @@ container
 │
 ├── Ollama server
 │
-├── FunctionGemma
+├── SmolLM 135M
 │
 └── /workspace
 ```
@@ -528,31 +479,37 @@ Clineからlocalhostで接続する。
 
 ---
 
-# 16. Phase 9 — Ollama serverの起動管理
+# 16. Phase 9 — Ollama serverの起動管理とプロセス管理
 
 Cline起動前にOllama serverが起動している必要がある。
 
-entrypointで、
+entrypointでの順序:
 
 ```text
-start Ollama
+start Ollama (background)
     ↓
-wait until Ollama API ready
+wait until Ollama API ready (health check)
     ↓
 start Cline CLI
 ```
 
-という順序にする。
-
 単純なsleepではなく、health checkを使用する。
 
-例えば、
-
 ```bash
-curl http://127.0.0.1:11434/api/tags
+until curl -s http://127.0.0.1:11434/api/tags > /dev/null; do
+  sleep 1
+done
 ```
 
 等でOllama APIが利用可能になるまで待つ。
+
+### プロセス管理設計（tini / supervisord の扱い）
+
+同一コンテナ内で複数プロセス（バックグラウンドのOllamaデーモンとフォアグラウンドのCline CLI）を実行する場合、PID 1問題（ゾンビプロセスの回収漏れ）やシグナル伝播（コンテナ停止時のSIGTERM処理）、Ollamaクラッシュ時の監視が課題となる。
+
+* **対応方針**:
+  * PID 1対策として、必要に応じて軽量initシステムである `tini`（Podmanの `--init` フラグまたはContainerfileへのtini導入）や supervisord の利用を検討する。
+  * **優先度**: **正常に隔離環境で疎通させることを第一優先とするため、準正常系の対応（クラッシュ監視や高度なシグナル伝播など）は初期フェーズでは優先度が低い**。まずはシンプルな entrypoint シェルスクリプトで確実に起動・疎通できることを確認し、安定化フェーズで段階的に堅牢化を行う。
 
 ---
 
@@ -872,41 +829,16 @@ rootful Podmanが必要になる場合は、なぜ必要なのかをPLAN/README�
 
 # 27. SELinux
 
-Oracle LinuxではSELinuxを考慮する。
-
-状態:
+本計画では、ホスト環境の実機設定に基づき **SELinux: Disabled を前提とする**。
 
 ```bash
 getenforce
+# -> Disabled
 ```
 
-SELinuxがEnforcingの場合、workspace mount時のlabelを適切に設定する。
+SELinuxがDisabledであるため、コンテナ起動時のボリュームマウントで `:Z` や `:z` の指定、およびSELinuxポリシー違反に起因する権限エラーの対処は当面考慮不要とする。
 
-必要に応じて、
-
-```bash
-:Z
-```
-
-または
-
-```bash
-:z
-```
-
-を利用する。
-
-ただし、安易にSELinuxを無効化しない。
-
-禁止:
-
-```bash
-setenforce 0
-```
-
-を恒久的な解決策として使用すること。
-
-SELinux関連エラーが発生した場合は、audit log等を調査して必要最小限の対応を行う。
+※将来的にSELinuxがEnforcingの環境へ移植・展開する場合には、workspace mount時に適切なコンテキストフラグ（`:z` / `:Z`）を付与し、audit logを監視して最小権限設定を行う。
 
 ---
 
@@ -922,9 +854,7 @@ sandboxがホスト資源を無制限に使用しないよう、必要に応じ�
 --pids-limit
 ```
 
-ただしFunctionGemma 270MはCPUのみで動作させるため、最初から厳しい制限を設定しない。
-
-まず正常動作させ、その後resource limitを追加する。
+SmolLM 135Mは極めて軽量（~270MB）でCPU負荷も低いため、最初から過度な制限はかけず、まず正常動作を確認した後に必要に応じてresource limitを追加する。
 
 ---
 
@@ -1058,7 +988,7 @@ PASS
 ## Test C — Model
 
 ```text
-Ollama → FunctionGemma 270M
+Ollama → SmolLM 135M
 ```
 
 Expected:
@@ -1067,11 +997,13 @@ PASS
 
 ---
 
-## Test D — Tool call
+## Test D — Connectivity / Response
 
 ```text
-Cline → LLM → tool call → Cline → tool execution
+Cline → Ollama → SmolLM 135M → Cline Response
 ```
+
+（※tool calling は初期ステップでは検証対象外とし、プロンプトに対する応答の正常受信を確認）
 
 Expected:
 
@@ -1079,10 +1011,10 @@ PASS
 
 ---
 
-## Test E — File write
+## Test E — Workspace mount test
 
 ```text
-Cline → /workspace/test.txt
+Host workspace ↔ Container /workspace mount read/write
 ```
 
 Expected:
@@ -1290,37 +1222,15 @@ Network capability
 
 ---
 
-# 39. モデルが弱すぎる場合
+# 39. モデル変更と将来のステップについて
 
-FunctionGemma 270MでClineが正常にtool callを行えない場合、すぐにsandbox設計を変更しない。
+初期フェーズでは `SmolLM 135M` を使用し、tool callingは検証対象外としてClineとOllamaの疎通およびPodman sandbox隔離の確認に専念する。
 
-まず、
+初期フェーズの疎通・隔離が完了した後、次のステップとしてtool callingやコーディングエージェントループを検証したい場合は、以下の順序で慎重に進める：
 
-```text
-Ollama単体
-    ↓
-tool calling
-```
-
-を再確認する。
-
-次に、
-
-```text
-Cline + Ollama
-```
-
-を再確認する。
-
-それでもagent loopが成立しない場合のみ、
-
-```text
-Qwen2.5 0.5B
-```
-
-等へ変更する。
-
-モデルサイズを大きくすることと、sandbox実装を変更することを同時に行わない。
+1. まずOllama単体でtool calling対応モデル（例: `qwen2.5-coder:1.5b` や `qwen2.5-coder:7b`）のtool calling動作を確認する。
+2. 次にCline + Ollamaでのtool calling連携を確認する。
+3. モデル変更とsandbox設計（ネットワーク遮断やマウント設定）の変更を同時に行わないこと。
 
 ---
 
@@ -1377,7 +1287,7 @@ READMEには以下を記載する。
 * Podman version
 * Cline CLI version
 * Ollama version
-* Model name/version
+* Model name/version (SmolLM 135M)
 * build方法
 * model準備方法
 * 起動方法
@@ -1398,19 +1308,19 @@ READMEには以下を記載する。
 * [ ] Oracle Linux / x86_64で動作
 * [ ] rootless Podmanで動作
 * [ ] GPU不要
+* [ ] SELinux: Disabled前提で動作確認
 
 ## LLM
 
 * [ ] Ollamaがコンテナ内で動作
-* [ ] FunctionGemma 270MがCPUで動作
+* [ ] SmolLM 135MがCPUで動作
 * [ ] Ollama APIがlocalhostで利用可能
 
 ## Cline
 
 * [ ] Cline CLIがコンテナ内で起動
-* [ ] ClineからOllamaを利用可能
-* [ ] tool callingが成立
-* [ ] shell/file toolが実行可能
+* [ ] ClineからOllama (SmolLM 135M) を利用可能（プロンプト/レスポンス疎通が成立）
+* [ ] （※tool calling / agent loopは初期ステップでは検証対象外）
 
 ## Filesystem
 
@@ -1433,7 +1343,6 @@ READMEには以下を記載する。
 * [ ] Docker/Podman socketをmountしていない
 * [ ] host root filesystemをmountしていない
 * [ ] 不要なLinux capabilitiesを削減している
-* [ ] SELinuxを無効化していない
 
 ## Reproducibility
 
@@ -1449,7 +1358,7 @@ READMEには以下を記載する。
 
 このPLANを実装するAIエージェントは、以下の原則を守る。
 
-1. まずPhase 0の環境調査を行う。
+1. まずPhase 0の環境調査・Podman導入を行う。
 2. 調査結果を提示してから実装方針を確定する。
 3. 一度に大量の変更を行わない。
 4. 各Phase終了時に動作確認する。
@@ -1462,8 +1371,9 @@ READMEには以下を記載する。
 11. credentialsをcontainerへ渡さない。
 12. network isolationを必ず実測する。
 13. 「ネットワークを設定したから安全」と判断せず、curl等による実通信テストを行う。
-14. FunctionGemma 270Mの能力不足とsandbox実装の問題を分離して調査する。
-15. 問題が解決しない場合、勝手に大幅な設計変更をせず、原因と代替案を報告する。
+14. SmolLM 135Mを使用し、tool callingは初期ステップ検証対象外とすることを厳守する（モデルの推論能力不足とsandbox実装の問題を混同しない）。
+15. 正常に隔離環境で疎通させることを最優先とし、準正常系の作り込みを優先しない。
+16. 問題が解決しない場合、勝手に大幅な設計変更をせず、原因と代替案を報告する。
 
 ---
 
@@ -1488,7 +1398,7 @@ READMEには以下を記載する。
         │  Ollama                  │
         │      │                   │
         │      ▼                   │
-        │ FunctionGemma 270M       │
+        │  SmolLM 135M             │
         │                          │
         │ /workspace               │
         └──────────┬───────────────┘
@@ -1506,23 +1416,21 @@ Network:
 
 この状態でClineに、
 
-```text
-リポジトリを調査し、必要なファイルを変更してください。
+```bash
+cline "Hello from sandbox test" --auto-approve true
 ```
 
-と指示し、
+と投入し、
 
 ```text
-LLM inference
+Cline request
+       ↓ localhost:11434
+Ollama inference (SmolLM 135M)
        ↓
-tool call
-       ↓
-Cline execution
-       ↓
-workspace modification
+Cline response display & completion
 ```
 
-まで実行できることを確認する。
+までエラーなく疎通できることを確認する。
 
 同時に、Clineが意図的または偶発的に、
 
