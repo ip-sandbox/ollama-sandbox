@@ -1,0 +1,46 @@
+FROM docker.io/library/ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV OLLAMA_HOST=127.0.0.1:11434
+
+# 1. 必要な基本ツールのインストール
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    git \
+    procps \
+    tar \
+    zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Node.js 22 (LTS) のインストール
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version \
+    && npm --version
+
+# 3. Cline CLI のインストール
+RUN npm install -g cline \
+    && cline --version || true
+
+# 4. Ollama のインストール & SmolLM 135M の事前キャッシュ（方式B: 完全オフライン対応）
+RUN curl -fsSL https://ollama.com/install.sh | sh \
+    && ollama --version \
+    && ollama serve & \
+    until curl -s http://127.0.0.1:11434/api/tags > /dev/null 2>&1; do sleep 1; done \
+    && ollama pull smollm:135m \
+    && pkill ollama \
+    && sleep 2
+
+# 5. workspace ディレクトリの作成
+RUN mkdir -p /workspace
+
+# 6. entrypoint スクリプトの配置
+COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/bin/bash"]
