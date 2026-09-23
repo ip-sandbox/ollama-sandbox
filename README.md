@@ -20,7 +20,7 @@ Linux Host
     └── Cline Sandbox Container (cline-sandbox:v2)
         ├── Cline CLI (v3.0.64 / Node.js 22 LTS)
         ├── Ollama Server (v0.34.2)
-        ├── SmolLM 135M (事前キャッシュ済み、完全オフライン動作)
+        ├── Ollama model volume (選択したモデルを事前キャッシュ)
         ├── /workspace (マウント)
         └── localhost:11434 (内部loopback通信のみ許可)
 ```
@@ -35,7 +35,45 @@ Linux Host
 * **コンテナOS**: Ubuntu 24.04 LTS ベース
 * **Node.js**: v22.23.2
 * **Cline CLI**: 3.0.64
-* **LLM**: SmolLM 135M (~91MB / 完全オフライン事前焼き込み)
+* **初期疎通用LLM**: SmolLM 135M (~91MB / イメージに焼き込み)
+
+### 次期モデル検証結果
+
+`qwen3:8b` を別のPodman named volumeへ保存し、`--network=none` 下で検証しました。
+
+* Ollama `/api/chat` + `tools`: `get_weather(city="Tokyo")` のtool call生成に成功
+* Clineエージェントループ: `editor` toolによる `/workspace/hello.txt` 作成と完了応答を確認
+* CPUのみでは初回Cline推論に約5分を要するため、`--thinking none` の指定を推奨
+* モデルが指定内容を厳密に再現せず、要求した `hello from qwen3` ではなく `hello` を書き込んだため、内容忠実性は未検証
+
+`qwen3:8b` は既存の `cline-sandbox:v2` イメージには焼き込んでいません。再現する場合は、モデルを保存したvolumeを `/models` にマウントし、`OLLAMA_MODELS=/models` を設定してください。
+
+## モデルの準備とTUIランチャー
+
+`entrypoint.sh` はモデルが見つからない場合に自動pullしません。モデルのダウンロードは、ネットワークを有効にした準備操作で明示的に行います。モデルを選択するだけで準備と起動を行うには、ホストで以下を実行してください。
+
+コンテナを直接起動する場合は、使用するモデルを`CLINE_MODEL`環境変数で必ず指定してください。未指定の場合、entrypointはエラー終了します。
+
+```bash
+./scripts/run.sh
+```
+
+Python標準ライブラリだけで動作するTUIで、次のモデルを選択できます。
+
+* `qwen3:8b`
+* `gemma4:12b-it-qat`
+* `gpt-oss:20b`
+* `mistral-nemo:12b-instruct-2407-q4_K_M`
+
+「ダウンロードしてsandboxを起動」を選ぶと、モデルを `ollama-models` named volumeへpullした後、同じモデルを `--network=none` のsandboxで起動します。「モデルをダウンロード」と「sandboxを起動」を別々に選ぶこともできます。モデルを追加する場合は、ネットワークを有効にしたダウンロード操作が必要です。
+
+モデル選択画面には、各モデルのダウンロード済み／未ダウンロード状態が表示されます。メインメニューの「ダウンロード済みモデルを削除」から、不要なモデルを選択して削除できます。削除前には確認画面が表示され、モデルvolume自体は削除されません。
+
+ランチャーのunit testは、追加依存なしで標準ライブラリの`unittest`を使って実行できます。
+
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ---
 
@@ -47,7 +85,7 @@ Linux Host
 podman build -t cline-sandbox:v2 -f sandbox/Containerfile sandbox
 ```
 
-※イメージ内に `smollm:135m` が焼き込まれるため、起動後は完全オフラインで動作します。
+※イメージ内には初期疎通用の `smollm:135m` が焼き込まれています。実用モデルはTUIランチャーでnamed volumeへ事前ダウンロードしてください。
 
 ### 2. 総合テストの実行（隔離性・推論・CLI疎通）
 

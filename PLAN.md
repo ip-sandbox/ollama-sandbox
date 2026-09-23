@@ -178,12 +178,10 @@ SmolLM 135M での疎通が確認でき、次のステップとしてより高�
 
 優先順位:
 
-1. `smollm:135m`（初期ステップ：超軽量疎通・sandbox検証用）
-2. `smollm:360m`（初期ステップ：少し語彙・推論力を上げたい場合）
-3. `qwen2.5:0.5b`（初期ステップ〜中間ステップ：小型LLM）
-4. `qwen2.5-coder:1.5b` / `qwen2.5-coder:7b`（将来ステップ：tool calling / コーディングエージェントループの本格検証用）
+1. `smollm:135m`（初期ステップ：超軽量疎通・sandbox検証用【達成済み】）
+2. `qwen3:8b`（次期ステップ：Ollama native tool calling および Cline コーディングエージェントループの本格検証用）
 
-初期フェーズでは tool calling は検証対象外とし、まずは `smollm:135m` による環境構築とネットワーク・ファイルシステム隔離の成立に集中する。
+初期フェーズの疎通・隔離が完了したため、次のステップでは `qwen3:8b` を使用して tool calling およびコーディングエージェントとしての動作検証を進める。
 
 ---
 
@@ -912,7 +910,7 @@ Ollamaモデルをcontainer imageに含める方式を最終候補とする。
 例:
 
 ```text
-cline-ollama-models
+ollama-models
 ```
 
 というPodman volumeを作り、
@@ -1222,15 +1220,17 @@ Network capability
 
 ---
 
-# 39. モデル変更と将来のステップについて
+# 39. モデル変更と次のステップ（Tool Calling / エージェントループ検証）について
 
-初期フェーズでは `SmolLM 135M` を使用し、tool callingは検証対象外としてClineとOllamaの疎通およびPodman sandbox隔離の確認に専念する。
+初期フェーズでは `SmolLM 135M` を使用し、tool callingは検証対象外としてClineとOllamaの疎通およびPodman sandbox隔離の確認を完了した。次期検証では `qwen3:8b` のOllama tool callingとClineのtool実行まで確認した。
 
-初期フェーズの疎通・隔離が完了した後、次のステップとしてtool callingやコーディングエージェントループを検証したい場合は、以下の順序で慎重に進める：
+次のステップとして、tool calling対応モデルである **`qwen3:8b`** を使用して以下の順序で進めた：
 
-1. まずOllama単体でtool calling対応モデル（例: `qwen2.5-coder:1.5b` や `qwen2.5-coder:7b`）のtool calling動作を確認する。
-2. 次にCline + Ollamaでのtool calling連携を確認する。
-3. モデル変更とsandbox設計（ネットワーク遮断やマウント設定）の変更を同時に行わないこと。
+1. Ollama単体で `qwen3:8b` の取得と tool calling API (`/api/chat` + `tools`) の動作を確認した。`get_weather(city="Tokyo")` のtool call生成に成功した。
+2. Clineの設定モデルを `qwen3:8b` に変更し、ネットワーク遮断下でファイル操作タスクを実行した。`editor` toolによる `hello.txt` 作成と完了応答を確認した。
+3. モデル変更とsandbox設計（ネットワーク遮断やマウント設定）の変更を混同せず、段階的に動作を確認する。
+
+なお、CPUのみでは初回Cline推論に約5分を要した。また、要求した `hello from qwen3` に対してモデルが `hello` を生成したため、エージェントループはtool実行まで成功、内容忠実性は未達である。
 
 ---
 
@@ -1320,7 +1320,8 @@ READMEには以下を記載する。
 
 * [x] Cline CLI (v3.0.64) がコンテナ内で起動
 * [x] Cline から Ollama (SmolLM 135M) を利用可能（設定初期化およびAPI疎通確認済み）
-* [] tool calling / agent loop (初期ステップでは検証対象外）
+* [x] `qwen3:8b` のOllama tool callingを確認（`get_weather(city="Tokyo")`）
+* [x] Clineのtool実行による `hello.txt` 作成を確認（内容忠実性は未達）
 
 ## Filesystem
 

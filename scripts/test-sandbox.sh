@@ -30,6 +30,7 @@ echo ">>> [TEST 1] Network Isolation & Localhost Verification <<<"
 podman run --rm \
     --network=none \
     -v "$WORKSPACE_DIR:/workspace:rw" \
+    -e CLINE_MODEL=smollm:135m \
     localhost/cline-sandbox:v2 \
     /workspace/test-network.sh
 
@@ -39,6 +40,7 @@ podman run --rm \
     --network=none \
     -v "$WORKSPACE_DIR:/workspace:rw" \
     -e TEST_SECRET_DIR="$SECRET_DIR" \
+    -e CLINE_MODEL=smollm:135m \
     localhost/cline-sandbox:v2 \
     /workspace/test-filesystem.sh
 
@@ -47,6 +49,7 @@ echo ">>> [TEST 3] Ollama Offline Inference (SmolLM 135M) <<<"
 podman run --rm \
     --network=none \
     -v "$WORKSPACE_DIR:/workspace:rw" \
+    -e CLINE_MODEL=smollm:135m \
     localhost/cline-sandbox:v2 \
     curl -s http://127.0.0.1:11434/api/generate -d '{"model":"smollm:135m","prompt":"Hello, answer with OK","stream":false}'
 
@@ -56,6 +59,7 @@ echo ">>> [TEST 4] Cline CLI & Ollama Connectivity Test <<<"
 podman run --rm \
     --network=none \
     -v "$WORKSPACE_DIR:/workspace:rw" \
+    -e CLINE_MODEL=smollm:135m \
     localhost/cline-sandbox:v2 \
     cline --version
 
