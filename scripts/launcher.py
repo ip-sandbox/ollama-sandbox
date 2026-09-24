@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TypeVar
 
 
-IMAGE = "localhost/cline-sandbox:v2"
+IMAGE = "localhost/cline-sandbox:v3"
 MODEL_VOLUME = "ollama-models"
 ENTRYPOINT_MODEL = "smollm:135m"
 ROOT = Path(__file__).resolve().parents[1]

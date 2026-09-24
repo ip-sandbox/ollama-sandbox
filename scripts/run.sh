@@ -14,5 +14,5 @@ echo "=== Starting Cline Sandbox (--network=none) ==="
 podman run --rm -it \
     --network=none \
     -v "$WORKSPACE_DIR:/workspace:rw" \
-    localhost/cline-sandbox:v2 \
+    localhost/cline-sandbox:v3 \
     "$@"

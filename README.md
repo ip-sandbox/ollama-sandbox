@@ -1,8 +1,8 @@
-# Cline CLI + Ollama Podman Sandbox
+# Cline CLI / Codex CLI + Ollama Podman Sandbox
 
-Linux (x86_64) 環境向けに、AIコーディングエージェント Cline CLI と超小型ローカルLLM（Ollama + SmolLM 135M）を同一の Podman コンテナ内に隔離して実行するサンドボックス環境です。
+Linux (x86_64) 環境向けに、AIコーディングエージェント Cline CLI・Codex CLI と超小型ローカルLLM（Ollama + SmolLM 135M）を同一の Podman コンテナ内に隔離して実行するサンドボックス環境です。
 
-`--network=none` により、コンテナから外部インターネットやLANへの通信を完全に遮断しつつ、コンテナ内部の loopback (`127.0.0.1`) を介して Cline と Ollama 間の推論通信を成立させます。
+`--network=none` により、コンテナから外部インターネットやLANへの通信を完全に遮断しつつ、コンテナ内部の loopback (`127.0.0.1`) を介して各エージェントと Ollama 間の推論通信を成立させます。
 
 ---
 
@@ -17,8 +17,9 @@ Linux Host
 │
 └── Podman (--network=none)
     │
-    └── Cline Sandbox Container (cline-sandbox:v2)
+    └── Cline Sandbox Container (cline-sandbox:v3)
         ├── Cline CLI (v3.0.64 / Node.js 22 LTS)
+        ├── Codex CLI (v0.156.1)
         ├── Ollama Server (v0.34.2)
         ├── Ollama model volume (選択したモデルを事前キャッシュ)
         ├── /workspace (マウント)
@@ -35,6 +36,8 @@ Linux Host
 * **コンテナOS**: Ubuntu 24.04 LTS ベース
 * **Node.js**: v22.23.2
 * **Cline CLI**: 3.0.64
+* **Codex CLI**: 0.156.1
+* **Ollama**: 0.34.2
 * **初期疎通用LLM**: SmolLM 135M (~91MB / イメージに焼き込み)
 
 ### 次期モデル検証結果
@@ -46,7 +49,7 @@ Linux Host
 * CPUのみでは初回Cline推論に約5分を要するため、`--thinking none` の指定を推奨
 * モデルが指定内容を厳密に再現せず、要求した `hello from qwen3` ではなく `hello` を書き込んだため、内容忠実性は未検証
 
-`qwen3:8b` は既存の `cline-sandbox:v2` イメージには焼き込んでいません。再現する場合は、モデルを保存したvolumeを `/models` にマウントし、`OLLAMA_MODELS=/models` を設定してください。
+`qwen3:8b` はイメージには焼き込んでいません。再現する場合は、モデルを保存したvolumeを `/models` にマウントし、`OLLAMA_MODELS=/models` を設定してください。
 
 ## モデルの準備とTUIランチャー
 
@@ -82,7 +85,7 @@ python3 -m unittest discover -s tests -v
 ### 1. サンドボックスコンテナのビルド
 
 ```bash
-podman build -t cline-sandbox:v2 -f sandbox/Containerfile sandbox
+podman build -t cline-sandbox:v3 -f sandbox/Containerfile sandbox
 ```
 
 ※イメージ内には初期疎通用の `smollm:135m` が焼き込まれています。実用モデルはTUIランチャーでnamed volumeへ事前ダウンロードしてください。
@@ -98,6 +101,7 @@ podman build -t cline-sandbox:v2 -f sandbox/Containerfile sandbox
 * **ファイルシステム隔離**: `/workspace` のみが読み書き可能であり、ホストの機密情報やコンテナソケットへのアクセスが遮断されていること
 * **オフライン推論**: 完全ネットワーク遮断下で SmolLM 135M が推論を返せること
 * **Cline CLI 疎通**: Cline CLI が正常に起動すること
+* **Codex CLI 起動・設定**: Codex CLI が起動し、Ollama 向けの設定が生成されていること
 
 ### 3. サンドボックスの対話起動
 
@@ -105,7 +109,38 @@ podman build -t cline-sandbox:v2 -f sandbox/Containerfile sandbox
 ./scripts/run.sh
 ```
 
-コンテナ内に入り、`cline` コマンドで対話操作やタスク実行が可能です。
+コンテナ内に入り、`cline` または `codex` コマンドで対話操作やタスク実行が可能です。起動時に使い方が表示されます。
+
+```bash
+cline                                         # Cline CLI（Ollama 設定済み。-P 指定は不要）
+echo "<prompt>" | cline                       # 非対話（日本語は引数ではなくパイプで渡す）
+codex                                         # Codex CLI（承認ポリシー: on-request）
+codex -a never                                # Codex を全自動で起動（セッション中は /permissions で変更）
+codex exec -c approval_policy='"never"' "<prompt>"   # 非対話・全自動
+```
+
+---
+
+## エージェント設定（entrypoint が起動時に生成）
+
+| 対象 | 内容 |
+|---|---|
+| Ollama | `OLLAMA_CONTEXT_LENGTH=32768`（Codex は `num_ctx` を送らないため必須。CPU の既定 4k では黙って切り詰められる）、`OLLAMA_KEEP_ALIVE=-1`（prompt cache 維持）、`OLLAMA_LOAD_TIMEOUT=30m` |
+| Cline | `~/.cline/data/settings/providers.json` に Ollama プロバイダを登録し、リクエストタイムアウト `timeout=1800000`（30 分）を設定。Bun fetch の既定 300 秒は `BUN_OPTIONS` の preload（`/usr/local/lib/cline/bun-fetch-no-timeout.js`）で外す |
+| Codex | `~/.codex/config.toml` に、プロバイダ `ollama-local`（`ollama` は予約済み）、`wire_api = "responses"`、`sandbox_mode = "danger-full-access"`（コンテナ自体が隔離境界。Codex の seccomp/landlock はコンテナ内で動かない）、`approval_policy = "on-request"` を設定 |
+
+いずれも `podman run -e` で上書きできます: `OLLAMA_CONTEXT_LENGTH` / `OLLAMA_KEEP_ALIVE` / `CLINE_TIMEOUT_MS` / `CODEX_APPROVAL_POLICY`（`never` で全自動）/ `CODEX_STREAM_IDLE_TIMEOUT_MS`
+
+### CPU 推論の所要時間（gemma4:12b-it-qat、Ryzen 5 PRO 4650G 4 コア）
+
+prefill（プロンプト処理）は約 8 tok/s です。**1 ターン目はエージェントのシステムプロンプト全体を処理するので長く、2 ターン目以降は prompt cache によって差分だけになります。**
+
+| エージェント | 1 ターン目のプロンプト | 1 ターン目 | 2 ターン目以降 | hello.txt タスク全体 |
+|---|---:|---:|---:|---:|
+| Cline | 約 4,500 tok | 約 9 分 | 20〜55 秒 | 約 10〜11 分 |
+| Codex | 約 8,400 tok | 約 18 分 | 25〜30 秒 | 約 19 分 |
+
+タイムアウト調査の詳細は `cpu-timeout/RESULT.md`、Codex 対応の検証結果は `CODEX_RESULT.md` を参照してください。
 
 ---
 

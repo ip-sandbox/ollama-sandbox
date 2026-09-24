@@ -7,6 +7,10 @@ Cline がどの層で何秒後にリクエストを切るかを、実モデル�
   silent   先頭バイト（ステータス行・ヘッダ）まで STUB_DELAY_SEC 秒無音。
            本物の Ollama が CPU で prefill している間と同じ（何も返らない）。
   headers  ヘッダは即返し、本文（最初の NDJSON 行）を STUB_DELAY_SEC 秒後に返す。
+  gap      最初のイベントまで即返し、その後 STUB_DELAY_SEC 秒無音（/v1/responses のみ。
+           Codex の stream_idle_timeout_ms の効き方を見る）
+
+Codex CLI 用に /v1/responses（Responses API の SSE）と /v1/models にも応答する。
 
 遅延は最初の /api/chat だけに掛ける（STUB_DELAY_ALL=1 で毎回）。
 応答は、リクエストの tools に完了系ツール（名前に "complet" を含む）があれば
@@ -113,7 +117,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         log(event="request", method="GET", path=self.path)
-        if self.path.startswith("/api/tags"):
+        if self.path.startswith("/v1/models"):
+            self._json(200, {"object": "list", "data": [{"id": MODEL, "object": "model", "owned_by": "library"}]})
+        elif self.path.startswith("/api/tags"):
             self._json(200, {"models": [{"name": MODEL, "model": MODEL, "modified_at": now_iso(),
                                          "size": 1, "digest": "stub",
                                          "details": {"family": "stub", "parameter_size": "12B",
@@ -135,6 +141,8 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         if self.path.startswith("/api/chat"):
             return self._chat(body)
+        if self.path.startswith("/v1/responses"):
+            return self._responses(body)
         log(event="request", method="POST", path=self.path, body_keys=list(body))
         if self.path.startswith("/api/show"):
             self._json(200, {"details": {"family": "gemma4"}, "model_info": {"gemma4.context_length": 131072},
@@ -178,6 +186,69 @@ class Handler(BaseHTTPRequestHandler):
                 return
             for line in self._chat_lines(summary["tools"]):
                 self._chunk(line)
+            self._chunk(b"")
+            log(event="chat_done", chat=n, delayed_sec=delay)
+        except (BrokenPipeError, ConnectionResetError) as e:
+            log(event="client_disconnected", chat=n, error=type(e).__name__)
+
+    def _responses(self, body):
+        """Responses API（SSE）。Codex CLI が叩く経路。"""
+        global _chat_count
+        with _lock:
+            _chat_count += 1
+            n = _chat_count
+        tools = body.get("tools") or []
+        instr = body.get("instructions") or ""
+        inp = body.get("input") or []
+        inp_chars = len(json.dumps(inp, ensure_ascii=False))
+        tool_chars = len(json.dumps(tools, ensure_ascii=False))
+        log(event="request", method="POST", path=self.path, chat=n,
+            instructions_chars=len(instr), input_items=len(inp), input_chars=inp_chars,
+            tools=[t.get("name") or t.get("type") for t in tools], tool_schema_chars=tool_chars,
+            approx_tokens=(len(instr) + inp_chars + tool_chars) // 4,
+            other_keys={k: v for k, v in body.items() if k not in ("instructions", "input", "tools")})
+        if DUMP_DIR:
+            os.makedirs(DUMP_DIR, exist_ok=True)
+            with open(os.path.join(DUMP_DIR, f"responses-{n}.json"), "w", encoding="utf-8") as f:
+                json.dump(body, f, ensure_ascii=False, indent=1)
+
+        delay = DELAY if (n == 1 or DELAY_ALL) else 0
+        rid, mid = f"resp_{n}", f"msg_{n}"
+        item = {"id": mid, "type": "message", "role": "assistant", "status": "completed",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}]}
+        events = [
+            ("response.created", {"response": {"id": rid, "object": "response", "status": "in_progress",
+                                                "model": MODEL, "output": []}}),
+            ("response.output_item.added", {"output_index": 0,
+                                            "item": {**item, "status": "in_progress", "content": []}}),
+            ("response.content_part.added", {"item_id": mid, "output_index": 0, "content_index": 0,
+                                             "part": {"type": "output_text", "text": "", "annotations": []}}),
+            ("response.output_text.delta", {"item_id": mid, "output_index": 0, "content_index": 0, "delta": "ok"}),
+            ("response.output_text.done", {"item_id": mid, "output_index": 0, "content_index": 0, "text": "ok"}),
+            ("response.content_part.done", {"item_id": mid, "output_index": 0, "content_index": 0,
+                                            "part": item["content"][0]}),
+            ("response.output_item.done", {"output_index": 0, "item": item}),
+            ("response.completed", {"response": {"id": rid, "object": "response", "status": "completed",
+                                                  "model": MODEL, "output": [item],
+                                                  "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+                                                            "input_tokens_details": {"cached_tokens": 0},
+                                                            "output_tokens_details": {"reasoning_tokens": 0}}}}),
+        ]
+        try:
+            if MODE == "silent" and delay and not self._wait(delay, n):
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.wfile.flush()
+            if MODE == "headers" and delay and not self._wait(delay, n):
+                return
+            for i, (etype, payload) in enumerate(events):
+                self._chunk(f"event: {etype}\ndata: {json.dumps({'type': etype, 'sequence_number': i, **payload})}\n\n".encode())
+                if i == 0 and MODE == "gap" and delay and not self._wait(delay, n):
+                    return
             self._chunk(b"")
             log(event="chat_done", chat=n, delayed_sec=delay)
         except (BrokenPipeError, ConnectionResetError) as e:

@@ -31,7 +31,7 @@ podman run --rm \
     --network=none \
     -v "$WORKSPACE_DIR:/workspace:rw" \
     -e CLINE_MODEL=smollm:135m \
-    localhost/cline-sandbox:v2 \
+    localhost/cline-sandbox:v3 \
     /workspace/test-network.sh
 
 echo ""
@@ -41,7 +41,7 @@ podman run --rm \
     -v "$WORKSPACE_DIR:/workspace:rw" \
     -e TEST_SECRET_DIR="$SECRET_DIR" \
     -e CLINE_MODEL=smollm:135m \
-    localhost/cline-sandbox:v2 \
+    localhost/cline-sandbox:v3 \
     /workspace/test-filesystem.sh
 
 echo ""
@@ -50,8 +50,8 @@ podman run --rm \
     --network=none \
     -v "$WORKSPACE_DIR:/workspace:rw" \
     -e CLINE_MODEL=smollm:135m \
-    localhost/cline-sandbox:v2 \
-    curl -s http://127.0.0.1:11434/api/generate -d '{"model":"smollm:135m","prompt":"Hello, answer with OK","stream":false}'
+    localhost/cline-sandbox:v3 \
+    curl -s --fail http://127.0.0.1:11434/api/generate -d '{"model":"smollm:135m","prompt":"Hello, answer with OK","stream":false}'
 
 echo ""
 echo ""
@@ -60,8 +60,17 @@ podman run --rm \
     --network=none \
     -v "$WORKSPACE_DIR:/workspace:rw" \
     -e CLINE_MODEL=smollm:135m \
-    localhost/cline-sandbox:v2 \
+    localhost/cline-sandbox:v3 \
     cline --version
+
+echo ""
+echo ">>> [TEST 5] Codex CLI Startup & Config Test <<<"
+podman run --rm \
+    --network=none \
+    -v "$WORKSPACE_DIR:/workspace:rw" \
+    -e CLINE_MODEL=smollm:135m \
+    localhost/cline-sandbox:v3 \
+    bash -c 'codex --version && grep -q "wire_api = \"responses\"" ~/.codex/config.toml && echo "codex config OK"'
 
 # 後片付け
 rm -f "$WORKSPACE_DIR/test-network.sh" "$WORKSPACE_DIR/test-filesystem.sh"
