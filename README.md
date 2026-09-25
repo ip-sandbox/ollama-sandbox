@@ -11,9 +11,19 @@ Linux (x86_64) 環境向けに、AIコーディングエージェント Cline CL
 ```text
 Linux Host
 │
+├── scripts/                    ← 起動と準備（run.sh, launcher.py, config.sh, models.json, proxy.sh, import_gguf_model.sh）
 ├── sandbox/
-│   ├── workspace/              ← ホスト側の作業ディレクトリ
-│   └── Containerfile
+│   ├── Containerfile           ← sandbox イメージ
+│   ├── scripts/                ← entrypoint.sh ほか、イメージに入るファイル
+│   ├── proxy/                  ← ネットワーク許可モード用のプロキシ（allowlist で接続先を指定）
+│   └── workspace/              ← ホスト側の作業ディレクトリ（中身は git 管理外）
+├── tests/
+│   ├── unit/                   ← launcher の unit test
+│   └── sandbox/                ← コンテナの統合テスト
+├── research/                   ← 検証・計測用のスクリプト（sandbox の動作には不要）
+├── docs/
+│   ├── plans/                  ← 計画書
+│   └── results/                ← 検証結果
 │
 └── Podman (--network=none)
     │
@@ -71,9 +81,11 @@ Python標準ライブラリだけで動作するTUIで、次のモデルを選�
 `devstral-small-2:24b-iq4_xs` は Ollama registry に無い量子化なので、`ollama pull` ではなく `scripts/import_gguf_model.sh` で取り込みます。
 * 重み: Unsloth の GGUF（12,187 MiB）を Hugging Face から取得し、sha256 を照合する。
 * テンプレート: Ollama 公式タグ `devstral-small-2:24b-instruct-2512-q4_K_M` の Go テンプレートを移植する。
-* 詳細は `docs/DEVSTRAL_RESULT.md` を参照してください。
+* 詳細は `docs/results/DEVSTRAL_RESULT.md` を参照してください。
 
-`mistral-nemo:12b-instruct-2407-q4_K_M` は一覧から外しました。Cline・Codex のどちらでもツールを正しく呼べなかったためです（`docs/MODEL_E2E_RESULT.md` / `docs/MODEL_E2E_CODEX_RESULT.md`）。既にダウンロード済みの場合は「ダウンロード済みモデルを削除」から削除できます。
+`mistral-nemo:12b-instruct-2407-q4_K_M` は一覧から外しました。Cline・Codex のどちらでもツールを正しく呼べなかったためです（`docs/results/MODEL_E2E_RESULT.md` / `docs/results/MODEL_E2E_CODEX_RESULT.md`）。既にダウンロード済みの場合は「ダウンロード済みモデルを削除」から削除できます。
+
+イメージ名や model volume 名は `scripts/config.sh` に、ランチャーのモデル一覧は `scripts/models.json` にまとめてあります。
 
 「ダウンロードしてsandboxを起動」を選ぶと、モデルを `ollama-models` named volumeへpullした後、同じモデルを `--network=none` のsandboxで起動します。「モデルをダウンロード」と「sandboxを起動」を別々に選ぶこともできます。モデルを追加する場合は、ネットワークを有効にしたダウンロード操作が必要です。
 
@@ -82,7 +94,7 @@ Python標準ライブラリだけで動作するTUIで、次のモデルを選�
 ランチャーのunit testは、追加依存なしで標準ライブラリの`unittest`を使って実行できます。
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests/unit -v
 ```
 
 ---
@@ -100,7 +112,7 @@ podman build -t cline-sandbox:v3 -f sandbox/Containerfile sandbox
 ### 2. 総合テストの実行（隔離性・推論・CLI疎通）
 
 ```bash
-./scripts/test-sandbox.sh
+./tests/sandbox/test-sandbox.sh
 ```
 
 このスクリプトは以下を自動検証します：
@@ -109,6 +121,12 @@ podman build -t cline-sandbox:v3 -f sandbox/Containerfile sandbox
 * **オフライン推論**: 完全ネットワーク遮断下で SmolLM 135M が推論を返せること
 * **Cline CLI 疎通**: Cline CLI が正常に起動すること
 * **Codex CLI 起動・設定**: Codex CLI が起動し、Ollama 向けの設定が生成されていること
+
+ネットワーク許可モード（後述）のテストは、外部に接続するため別になっています。
+
+```bash
+./tests/sandbox/test-proxy.sh
+```
 
 ### 3. サンドボックスの対話起動
 
@@ -125,6 +143,31 @@ codex                                         # Codex CLI（承認ポリシー: 
 codex -a never                                # Codex を全自動で起動（セッション中は /permissions で変更）
 codex exec -c approval_policy='"never"' "<prompt>"   # 非対話・全自動
 ```
+
+コマンドを直接渡す場合は、使うモデルを `CLINE_MODEL` で指定します: `CLINE_MODEL=qwen3:8b ./scripts/run.sh cline`
+
+### 4. ネットワーク許可モード（任意）
+
+既定の起動はネットワークを完全に遮断します（`--network=none`）。`pip install` や `git clone` のように、決まった外部サイトへの接続が必要な作業だけ、許可リストのドメインに限って通信を許可できます。
+
+```bash
+./scripts/run.sh                                  # ランチャーで「sandboxを起動（ネットワーク許可: 許可リストのみ）」を選ぶ
+SANDBOX_NETWORK=proxy CLINE_MODEL=qwen3:8b ./scripts/run.sh bash   # 直接起動する場合
+./scripts/proxy.sh status                         # 許可リストと、最近拒否した接続先を表示
+```
+
+```text
+sandbox ──(内部ネットワーク: 外への経路も外部 DNS も無い)── proxy ──(出口ネットワーク)── 外部
+```
+
+* sandbox は、外に出られない内部ネットワーク（`podman network create --internal`）だけにつながります。外部 IP への直接接続、外部名の DNS 解決、ホスト上のサービスへの接続はできません。
+* 外向き通信は、プロキシ（`sandbox/proxy/`、tinyproxy）を経由したものだけが通ります。`sandbox/proxy/allowlist` に一致するホストだけを中継し、それ以外は 403 で拒否します。
+* 許可リストは既定で PyPI、npm、GitHub です。編集すると、次の起動から反映されます（再ビルド不要）。
+* sandbox には `HTTP(S)_PROXY` と `NO_PROXY=127.0.0.1,localhost` を渡します。Cline / Codex からコンテナ内の Ollama への通信はプロキシを通りません。
+* プロキシのイメージは初回起動時に自動でビルドされ、sandbox の終了時にプロキシも停止します。
+* Cline のテレメトリ（`*.cline.bot`）や Codex の `chatgpt.com` への接続は、許可リストに無いので拒否されます。
+
+★ **Codex の `web_search` は、このモードでも使えません。** Codex は `web_search` を OpenAI のサーバー側で実行するツールとして送りますが、Ollama は検索を実行しないためです。外部の情報が必要な場合は、許可したドメインから `curl` などで取得させてください。
 
 ---
 
@@ -157,17 +200,28 @@ prefill（プロンプト処理）は約 8 tok/s です。**1 ターン目はエ
 
 devstral は Cline の 1 ターン目が約 19 分で、既定のリクエストタイムアウト（30 分）に近いです。長い指示を渡す場合は `-e CLINE_TIMEOUT_MS=3600000` で延ばしてください。
 
-タイムアウト調査の詳細は `docs/RESULT.md`、Codex 対応の検証結果は `docs/CODEX_RESULT.md` を参照してください。
+## ドキュメント
+
+| 文書 | 内容 |
+|---|---|
+| `docs/results/CPU_TIMEOUT_RESULT.md` | CPU 推論で Cline がタイムアウトする原因（Bun fetch と Cline の 2 層）と対策 |
+| `docs/results/CODEX_RESULT.md` | Codex CLI の組み込みと、タイムアウト・実タスクの検証 |
+| `docs/results/MODEL_E2E_RESULT.md` / `MODEL_E2E_CODEX_RESULT.md` | gpt-oss / mistral-nemo × Cline / Codex |
+| `docs/results/APPLY_PATCH_RESULT.md` | Codex + Ollama で apply_patch が失敗する原因 |
+| `docs/results/DEVSTRAL_RESULT.md` | Devstral Small 2 24B IQ4_XS の取り込みと検証 |
+| `docs/plans/` | 各作業の計画書 |
+| `research/README.md` | 検証スクリプトの使い方（旧 `cpu-timeout/` からの対応表あり） |
 
 ---
 
 ## セキュリティ特性
 
-1. **ネットワーク完全遮断 (`--network=none`)**
+1. **ネットワーク完全遮断 (`--network=none`、既定)**
    - 外部インターネット、LAN、ホスト側サービスへのアクセス不可
    - ソースコードやクレデンシャルの外部流出を物理的に防止
+   - ネットワーク許可モードを選んだときだけ、許可リストのドメインへの HTTP(S) が通る（ホスト・LAN・DNS は遮断のまま）
 2. **ファイルシステム最小マウント**
-   - マウントされるのは `./sandbox/workspace` のみ
+   - マウントされるのは `./sandbox/workspace` とモデル volume のみ
    - ホストの root filesystem や `$HOME`、Docker/Podman socket (`/var/run/docker.sock`) は一切マウントされません
 3. **特権モードの禁止**
    - `--privileged` は使用せず、rootless Podman で動作します

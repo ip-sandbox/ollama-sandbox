@@ -11,7 +11,7 @@
 # ollama create は同じ digest の blob があればそれを使うので、GGUF は複製されない。
 #
 # テンプレートは Ollama registry の公式タグから template / params レイヤだけを取る（重みは落とさない）。
-# 詳細: docs/DEVSTRAL_RESULT.md
+# 詳細: docs/results/DEVSTRAL_RESULT.md
 set -euo pipefail
 
 if [ "$#" -lt 5 ]; then

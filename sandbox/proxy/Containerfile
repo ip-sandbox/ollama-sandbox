@@ -1,0 +1,14 @@
+# cline-sandbox-proxy: sandbox の外向き通信を、許可リストのドメインだけに絞る HTTP(S) プロキシ
+#
+# 使い方は README の「ネットワーク許可モード」を参照。許可リストは実行時に
+# /etc/tinyproxy/allowlist へ読み取り専用でマウントする（変更にイメージの再ビルドは要らない）。
+FROM docker.io/library/alpine:3
+
+RUN apk add --no-cache tinyproxy \
+    && tinyproxy -v
+
+COPY tinyproxy.conf /etc/tinyproxy/tinyproxy.conf
+
+EXPOSE 8888
+# -d: フォアグラウンドで動かし、ログを podman logs で見られるようにする
+ENTRYPOINT ["tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"]

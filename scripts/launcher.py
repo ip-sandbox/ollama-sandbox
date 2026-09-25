@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -13,13 +16,30 @@ from pathlib import Path
 from typing import TypeVar
 
 
-IMAGE = "localhost/cline-sandbox:v3"
-MODEL_VOLUME = "ollama-models"
-ENTRYPOINT_MODEL = "smollm:135m"
 ROOT = Path(__file__).resolve().parents[1]
+CONFIG_FILE = ROOT / "scripts" / "config.sh"
+MODELS_FILE = ROOT / "scripts" / "models.json"
 WORKSPACE = ROOT / "sandbox" / "workspace"
 IMPORT_SCRIPT = ROOT / "scripts" / "import_gguf_model.sh"
+PROXY_SCRIPT = ROOT / "scripts" / "proxy.sh"
+ENTRYPOINT_MODEL = "smollm:135m"
 BACK = object()
+
+
+def load_config(path: Path = CONFIG_FILE) -> dict[str, str]:
+    """config.sh の KEY="${KEY:-値}" 行から既定値を読み、環境変数があればそちらを使う。"""
+    config: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r'(\w+)="\$\{\1:-(.*)\}"', line.strip())
+        if match:
+            key, default = match.groups()
+            config[key] = os.environ.get(key, default)
+    return config
+
+
+CONFIG = load_config()
+IMAGE = CONFIG["SANDBOX_IMAGE"]
+MODEL_VOLUME = CONFIG["MODEL_VOLUME"]
 
 
 @dataclass(frozen=True)
@@ -40,25 +60,25 @@ class Model:
     gguf: GgufSource | None = None
 
 
-MODELS = [
-    Model("Qwen3 8B", "qwen3:8b"),
-    Model("Gemma 4 12B IT QAT", "gemma4:12b-it-qat"),
-    Model("GPT-OSS 20B", "gpt-oss:20b"),
-    Model(
-        "Devstral Small 2 24B IQ4_XS",
-        "devstral-small-2:24b-iq4_xs",
-        GgufSource(
-            url=(
-                "https://huggingface.co/unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF"
-                "/resolve/main/Devstral-Small-2-24B-Instruct-2512-IQ4_XS.gguf"
-            ),
-            sha256="6b8270a839e7a1263f34a799c18fb9eb0ca6f1d039cdbfa4a11f9ac9552a118a",
-            size=12_780_424_352,
-            template_from="devstral-small-2:24b-instruct-2512-q4_K_M",
-            parameters=("min_p=0.01",),
-        ),
-    ),
-]
+def load_models(path: Path = MODELS_FILE) -> list[Model]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    models = []
+    for entry in data["models"]:
+        gguf = entry.get("gguf")
+        source = None
+        if gguf is not None:
+            source = GgufSource(
+                url=gguf["url"],
+                sha256=gguf["sha256"],
+                size=int(gguf["size"]),
+                template_from=gguf["template_from"],
+                parameters=tuple(gguf.get("parameters", ())),
+            )
+        models.append(Model(entry["label"], entry["tag"], source))
+    return models
+
+
+MODELS = load_models()
 Option = TypeVar("Option")
 
 
@@ -308,30 +328,37 @@ def model_is_available(model: Model) -> bool:
     return result.returncode == 0
 
 
-def launch(model: Model) -> None:
+def launch_command(model: Model, *, allow_network: bool = False) -> list[str]:
+    """sandbox の起動コマンド。allow_network なら許可リスト付きプロキシ経由（scripts/proxy.sh）。"""
+    options = [
+        "-it",
+        "-v",
+        f"{WORKSPACE}:/workspace:rw",
+        "-v",
+        f"{MODEL_VOLUME}:/models",
+        "-e",
+        "OLLAMA_MODELS=/models",
+        "-e",
+        f"CLINE_MODEL={model.tag}",
+        IMAGE,
+    ]
+    if allow_network:
+        return ["bash", str(PROXY_SCRIPT), "run", *options]
+    return ["podman", "run", "--rm", "--network=none", *options]
+
+
+def launch(model: Model, *, allow_network: bool = False) -> None:
     if not model_is_available(model):
         raise RuntimeError(
             f"{model.tag} は未ダウンロードです。先に「モデルをダウンロード」を実行してください。"
         )
+    if allow_network:
+        print(
+            "\n★ ネットワーク許可モードです。sandbox から sandbox/proxy/allowlist のドメインへ"
+            "通信できます（それ以外・ホスト・DNS は遮断）。"
+        )
     print(f"\n{model.tag} でsandboxを起動します。終了するにはコンテナ内でexitしてください。\n")
-    run(
-        [
-            "podman",
-            "run",
-            "--rm",
-            "-it",
-            "--network=none",
-            "-v",
-            f"{WORKSPACE}:/workspace:rw",
-            "-v",
-            f"{MODEL_VOLUME}:/models",
-            "-e",
-            "OLLAMA_MODELS=/models",
-            "-e",
-            f"CLINE_MODEL={model.tag}",
-            IMAGE,
-        ],
-    )
+    run(launch_command(model, allow_network=allow_network))
 
 
 def main() -> int:
@@ -344,6 +371,7 @@ def main() -> int:
                     ("モデルをダウンロード", "prepare"),
                     ("sandboxを起動", "launch"),
                     ("ダウンロードしてsandboxを起動", "prepare_launch"),
+                    ("sandboxを起動（ネットワーク許可: 許可リストのみ）", "launch_proxy"),
                     ("ダウンロード済みモデルを削除", "delete"),
                     ("終了", "exit"),
                 ],
@@ -368,6 +396,8 @@ def main() -> int:
                 prepare_model(model)
             if action in ("launch", "prepare_launch"):
                 launch(model)
+            if action == "launch_proxy":
+                launch(model, allow_network=True)
     except KeyboardInterrupt:
         print("\n終了しました。")
         return 130

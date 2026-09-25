@@ -1,0 +1,21 @@
+# sandbox からの通信を許可するホスト（1 行に 1 つ、拡張正規表現、大文字小文字は区別しない）
+#
+# launcher の「ネットワーク許可モード」で起動したときだけ効く。既定の起動（--network=none）では
+# このファイルに関係なく外部通信はすべて遮断される。
+# 変更したら、次にネットワーク許可モードで起動したときに反映される（イメージの再ビルドは不要）。
+#
+# ★ 行頭の ^ と行末の $ を必ず付けること。付けないと evil-pypi.org.example.com のような
+#   名前にも一致してしまう。
+
+# Python パッケージ
+^pypi\.org$
+^files\.pythonhosted\.org$
+
+# npm パッケージ
+^registry\.npmjs\.org$
+
+# GitHub（clone とリリースの取得）
+^github\.com$
+^codeload\.github\.com$
+^objects\.githubusercontent\.com$
+^raw\.githubusercontent\.com$

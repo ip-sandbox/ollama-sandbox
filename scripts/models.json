@@ -1,0 +1,19 @@
+{
+  "_comment": "launcher.py がダウンロード対象として表示するモデル。gguf を持つものは ollama pull ではなく import_gguf_model.sh で取り込む（docs/results/DEVSTRAL_RESULT.md）",
+  "models": [
+    {"label": "Qwen3 8B", "tag": "qwen3:8b"},
+    {"label": "Gemma 4 12B IT QAT", "tag": "gemma4:12b-it-qat"},
+    {"label": "GPT-OSS 20B", "tag": "gpt-oss:20b"},
+    {
+      "label": "Devstral Small 2 24B IQ4_XS",
+      "tag": "devstral-small-2:24b-iq4_xs",
+      "gguf": {
+        "url": "https://huggingface.co/unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF/resolve/main/Devstral-Small-2-24B-Instruct-2512-IQ4_XS.gguf",
+        "sha256": "6b8270a839e7a1263f34a799c18fb9eb0ca6f1d039cdbfa4a11f9ac9552a118a",
+        "size": 12780424352,
+        "template_from": "devstral-small-2:24b-instruct-2512-q4_K_M",
+        "parameters": ["min_p=0.01"]
+      }
+    }
+  ]
+}
