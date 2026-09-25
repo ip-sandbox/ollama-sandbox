@@ -26,6 +26,9 @@ class DownloadedModelsTests(unittest.TestCase):
             stdout=(
                 "[entrypoint] Starting Ollama server in background...\n"
                 "[entrypoint] Ollama API is ready.\n"
+                "  cline                                  # Cline CLI\n"
+                "  codex -a never                         # Codex\n"
+                "  ※ CPU 推論では 1 ターン目に 10 分以上かかることがあります\n"
                 "NAME              ID              SIZE      MODIFIED\n"
                 "qwen3:8b          abc123          5.0 GB    2 hours ago\n"
                 "gemma4:12b-it-qat def456          8.0 GB    1 hour ago\n"
@@ -57,6 +60,63 @@ class DownloadedModelsTests(unittest.TestCase):
 
         self.assertEqual(result, set())
         ensure_volume_mock.assert_called_once_with()
+
+
+class PrepareCommandTests(unittest.TestCase):
+    def test_registry_model_uses_ollama_pull(self):
+        model = launcher.Model("Qwen3 8B", "qwen3:8b")
+
+        command = launcher.prepare_command(model)
+
+        self.assertIn("--network=host", command)
+        self.assertEqual(command[-4:], [launcher.IMAGE, "ollama", "pull", "qwen3:8b"])
+        self.assertNotIn("OLLAMA_NOPRUNE=1", command)
+
+    def test_gguf_model_runs_import_script(self):
+        source = launcher.GgufSource(
+            url="https://example.com/m.gguf",
+            sha256="ab" * 32,
+            size=123,
+            template_from="official:tag",
+            parameters=("min_p=0.01",),
+        )
+        model = launcher.Model("M", "m:local", source)
+
+        command = launcher.prepare_command(model)
+
+        self.assertIn("OLLAMA_NOPRUNE=1", command)
+        self.assertIn(f"{launcher.IMPORT_SCRIPT}:/opt/import_gguf_model.sh:ro", command)
+        image_at = command.index(launcher.IMAGE)
+        self.assertEqual(
+            command[image_at + 1:],
+            ["bash", "/opt/import_gguf_model.sh", "m:local", "https://example.com/m.gguf",
+             "ab" * 32, "123", "official:tag", "min_p=0.01"],
+        )
+
+    def test_devstral_is_listed_and_mistral_nemo_is_not(self):
+        tags = {model.tag for model in launcher.MODELS}
+
+        self.assertIn("devstral-small-2:24b-iq4_xs", tags)
+        self.assertNotIn("mistral-nemo:12b-instruct-2407-q4_K_M", tags)
+        self.assertTrue(launcher.IMPORT_SCRIPT.is_file())
+
+
+class SelectDownloadedModelTests(unittest.TestCase):
+    @patch.object(launcher, "select_option")
+    @patch.object(launcher, "downloaded_models")
+    def test_unlisted_downloaded_model_can_still_be_deleted(
+        self, downloaded_mock, select_mock
+    ):
+        downloaded_mock.return_value = {
+            "gpt-oss:20b",
+            "mistral-nemo:12b-instruct-2407-q4_K_M",
+        }
+        select_mock.side_effect = lambda prompt, options: options
+
+        options = launcher.select_downloaded_model()
+
+        tags = [model.tag for _, model in options if model is not launcher.BACK]
+        self.assertEqual(tags, ["gpt-oss:20b", "mistral-nemo:12b-instruct-2407-q4_K_M"])
 
 
 if __name__ == "__main__":

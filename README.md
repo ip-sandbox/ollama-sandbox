@@ -66,7 +66,14 @@ Python標準ライブラリだけで動作するTUIで、次のモデルを選�
 * `qwen3:8b`
 * `gemma4:12b-it-qat`
 * `gpt-oss:20b`
-* `mistral-nemo:12b-instruct-2407-q4_K_M`
+* `devstral-small-2:24b-iq4_xs`（Devstral Small 2 24B Instruct 2512 の IQ4_XS）
+
+`devstral-small-2:24b-iq4_xs` は Ollama registry に無い量子化なので、`ollama pull` ではなく `scripts/import_gguf_model.sh` で取り込みます。
+* 重み: Unsloth の GGUF（12,187 MiB）を Hugging Face から取得し、sha256 を照合する。
+* テンプレート: Ollama 公式タグ `devstral-small-2:24b-instruct-2512-q4_K_M` の Go テンプレートを移植する。
+* 詳細は `docs/DEVSTRAL_RESULT.md` を参照してください。
+
+`mistral-nemo:12b-instruct-2407-q4_K_M` は一覧から外しました。Cline・Codex のどちらでもツールを正しく呼べなかったためです（`docs/MODEL_E2E_RESULT.md` / `docs/MODEL_E2E_CODEX_RESULT.md`）。既にダウンロード済みの場合は「ダウンロード済みモデルを削除」から削除できます。
 
 「ダウンロードしてsandboxを起動」を選ぶと、モデルを `ollama-models` named volumeへpullした後、同じモデルを `--network=none` のsandboxで起動します。「モデルをダウンロード」と「sandboxを起動」を別々に選ぶこともできます。モデルを追加する場合は、ネットワークを有効にしたダウンロード操作が必要です。
 
@@ -131,7 +138,7 @@ codex exec -c approval_policy='"never"' "<prompt>"   # 非対話・全自動
 
 いずれも `podman run -e` で上書きできます: `OLLAMA_CONTEXT_LENGTH` / `OLLAMA_KEEP_ALIVE` / `CLINE_TIMEOUT_MS` / `CODEX_APPROVAL_POLICY`（`never` で全自動）/ `CODEX_STREAM_IDLE_TIMEOUT_MS`
 
-### CPU 推論の所要時間（gemma4:12b-it-qat、Ryzen 5 PRO 4650G 4 コア）
+### CPU 推論の所要時間（Ryzen 5 PRO 4650G 4 コア）
 
 prefill（プロンプト処理）は約 8 tok/s です。**1 ターン目はエージェントのシステムプロンプト全体を処理するので長く、2 ターン目以降は prompt cache によって差分だけになります。**
 
@@ -140,7 +147,17 @@ prefill（プロンプト処理）は約 8 tok/s です。**1 ターン目はエ
 | Cline | 約 4,500 tok | 約 9 分 | 20〜55 秒 | 約 10〜11 分 |
 | Codex | 約 8,400 tok | 約 18 分 | 25〜30 秒 | 約 19 分 |
 
-タイムアウト調査の詳細は `cpu-timeout/RESULT.md`、Codex 対応の検証結果は `CODEX_RESULT.md` を参照してください。
+上表は gemma4:12b-it-qat の値です。他のモデルの hello.txt タスク全体の所要時間:
+
+| モデル | prefill | Cline | Codex |
+|---|---:|---:|---:|
+| gemma4:12b-it-qat | 約 8 tok/s | 約 10 分 | 約 19 分 |
+| gpt-oss:20b | 約 20 tok/s | 約 5 分 | 約 21 分（apply_patch の失敗を 4 回挟む） |
+| devstral-small-2:24b-iq4_xs | 約 4.6 tok/s | 約 20 分 | 約 28 分 |
+
+devstral は Cline の 1 ターン目が約 19 分で、既定のリクエストタイムアウト（30 分）に近いです。長い指示を渡す場合は `-e CLINE_TIMEOUT_MS=3600000` で延ばしてください。
+
+タイムアウト調査の詳細は `docs/RESULT.md`、Codex 対応の検証結果は `docs/CODEX_RESULT.md` を参照してください。
 
 ---
 

@@ -18,20 +18,46 @@ MODEL_VOLUME = "ollama-models"
 ENTRYPOINT_MODEL = "smollm:135m"
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT / "sandbox" / "workspace"
+IMPORT_SCRIPT = ROOT / "scripts" / "import_gguf_model.sh"
 BACK = object()
+
+
+@dataclass(frozen=True)
+class GgufSource:
+    """Ollama registry に無い量子化を、HF の GGUF と公式タグのテンプレートから組み立てる。"""
+
+    url: str
+    sha256: str
+    size: int
+    template_from: str
+    parameters: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class Model:
     label: str
     tag: str
+    gguf: GgufSource | None = None
 
 
 MODELS = [
     Model("Qwen3 8B", "qwen3:8b"),
     Model("Gemma 4 12B IT QAT", "gemma4:12b-it-qat"),
     Model("GPT-OSS 20B", "gpt-oss:20b"),
-    Model("Mistral Nemo 12B Q4_K_M", "mistral-nemo:12b-instruct-2407-q4_K_M"),
+    Model(
+        "Devstral Small 2 24B IQ4_XS",
+        "devstral-small-2:24b-iq4_xs",
+        GgufSource(
+            url=(
+                "https://huggingface.co/unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF"
+                "/resolve/main/Devstral-Small-2-24B-Instruct-2512-IQ4_XS.gguf"
+            ),
+            sha256="6b8270a839e7a1263f34a799c18fb9eb0ca6f1d039cdbfa4a11f9ac9552a118a",
+            size=12_780_424_352,
+            template_from="devstral-small-2:24b-instruct-2512-q4_K_M",
+            parameters=("min_p=0.01",),
+        ),
+    ),
 ]
 Option = TypeVar("Option")
 
@@ -131,28 +157,45 @@ def ensure_volume() -> None:
         )
 
 
+def prepare_command(model: Model) -> list[str]:
+    command = [
+        "podman",
+        "run",
+        "--rm",
+        "--network=host",
+        "-v",
+        f"{MODEL_VOLUME}:/models",
+        "-e",
+        "OLLAMA_MODELS=/models",
+        "-e",
+        f"CLINE_MODEL={model.tag}",
+    ]
+    if model.gguf is None:
+        return command + [IMAGE, "ollama", "pull", model.tag]
+    source = model.gguf
+    return command + [
+        # serve 起動時の未参照 blob 掃除で、取得途中の GGUF を消されないようにする
+        "-e",
+        "OLLAMA_NOPRUNE=1",
+        "-v",
+        f"{IMPORT_SCRIPT}:/opt/import_gguf_model.sh:ro",
+        IMAGE,
+        "bash",
+        "/opt/import_gguf_model.sh",
+        model.tag,
+        source.url,
+        source.sha256,
+        str(source.size),
+        source.template_from,
+        *source.parameters,
+    ]
+
+
 def prepare_model(model: Model) -> None:
     ensure_volume()
     print(f"\n{model.tag} をモデルvolumeへダウンロードします。")
     print("この操作には大容量の通信とディスク容量が必要です。\n")
-    run(
-        [
-            "podman",
-            "run",
-            "--rm",
-            "--network=host",
-            "-v",
-            f"{MODEL_VOLUME}:/models",
-            "-e",
-            "OLLAMA_MODELS=/models",
-            "-e",
-            f"CLINE_MODEL={model.tag}",
-            IMAGE,
-            "ollama",
-            "pull",
-            model.tag,
-        ],
-    )
+    run(prepare_command(model))
 
 
 def downloaded_models() -> set[str]:
@@ -180,10 +223,16 @@ def downloaded_models() -> set[str]:
         stderr=subprocess.PIPE,
         cwd=ROOT,
     )
+    # entrypoint の起動ログと使い方の表示が先に出るので、ollama list の見出し行より後だけを読む
     models: set[str] = set()
+    in_table = False
     for line in result.stdout.splitlines():
         fields = line.split()
-        if fields and fields[0] != "NAME" and not fields[0].startswith("["):
+        if not fields:
+            continue
+        if fields[0] == "NAME":
+            in_table = True
+        elif in_table:
             models.add(fields[0])
     return models
 
@@ -221,6 +270,9 @@ def delete_model(model: Model) -> None:
 def select_downloaded_model() -> Model | None | object:
     downloaded = downloaded_models()
     available = [model for model in MODELS if model.tag in downloaded]
+    # 一覧から外したモデル（例: mistral-nemo）も、volume に残っていれば削除できるようにする
+    known = {model.tag for model in MODELS}
+    available += [Model("一覧外のモデル", tag) for tag in sorted(downloaded - known)]
     if not available:
         print("\nダウンロード済みの選択可能なモデルはありません。")
         return BACK
