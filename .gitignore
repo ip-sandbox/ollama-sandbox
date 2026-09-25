@@ -1,1 +1,3 @@
 __pycache__/
+cpu-timeout/.state/
+cpu-timeout/.venv/
