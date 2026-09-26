@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh - Ollama・Cline CLI・Codex CLI を検証済みの版で入れる（root で実行）
+# install.sh - Ollama・Cline CLI・Codex CLI・Copilot CLI を検証済みの版で入れる（root で実行）
 #
 #   install.sh [--with-smollm | --check]
 #
@@ -13,10 +13,13 @@ set -euo pipefail
 OLLAMA_VERSION="${OLLAMA_VERSION:-0.34.2}"
 CLINE_VERSION="${CLINE_VERSION:-3.0.64}"
 CODEX_VERSION="${CODEX_VERSION:-0.156.1}"
+COPILOT_VERSION="${COPILOT_VERSION:-1.0.88}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
 PRELOAD_DIR=/usr/local/lib/cline
 # Cline CLI は起動のたびに（--version でも）npm の最新版を確かめて自動更新するので、止めて版を固定する
 export CLINE_NO_AUTO_UPDATE=1
+# Copilot CLI も自動更新を止める（npm 版は新しい版を知らせるだけだが、念のため）
+export COPILOT_AUTO_UPDATE=false
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -24,7 +27,8 @@ node_ok()   { [ "$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')" = 
 ollama_ok() { ollama --version 2>&1 | grep -q "version is $OLLAMA_VERSION\$"; }
 agents_ok() {
     [ "$(cline --version 2>/dev/null)" = "$CLINE_VERSION" ] \
-        && [ "$(codex --version 2>/dev/null)" = "codex-cli $CODEX_VERSION" ]
+        && [ "$(codex --version 2>/dev/null)" = "codex-cli $CODEX_VERSION" ] \
+        && [ "$(copilot --version 2>/dev/null | sed -n 1p)" = "GitHub Copilot CLI $COPILOT_VERSION." ]
 }
 preload_ok() { [ -f "$PRELOAD_DIR/bun-fetch-no-timeout.js" ]; }
 
@@ -35,7 +39,7 @@ case "${1:-}" in
         ok=0
         node_ok    || { echo "[install] Node.js $NODE_MAJOR がありません" >&2; ok=1; }
         ollama_ok  || { echo "[install] Ollama $OLLAMA_VERSION がありません" >&2; ok=1; }
-        agents_ok  || { echo "[install] cline $CLINE_VERSION / codex $CODEX_VERSION がありません" >&2; ok=1; }
+        agents_ok  || { echo "[install] cline $CLINE_VERSION / codex $CODEX_VERSION / copilot $COPILOT_VERSION がありません" >&2; ok=1; }
         preload_ok || { echo "[install] $PRELOAD_DIR/bun-fetch-no-timeout.js がありません" >&2; ok=1; }
         exit "$ok"
         ;;
@@ -76,13 +80,15 @@ if ! ollama_ok; then
 fi
 ollama --version 2>&1 | grep 'version is'
 
-# 4. Cline CLI / Codex CLI
+# 4. Cline CLI / Codex CLI / Copilot CLI
+#    Copilot CLI は初回起動時に本体（約 165MB）を ~/.cache/copilot に展開する。--version でここで済ませておく
 if ! agents_ok; then
-    echo "[install] cline $CLINE_VERSION / codex $CODEX_VERSION"
-    npm install -g "cline@${CLINE_VERSION}" "@openai/codex@${CODEX_VERSION}"
+    echo "[install] cline $CLINE_VERSION / codex $CODEX_VERSION / copilot $COPILOT_VERSION"
+    npm install -g "cline@${CLINE_VERSION}" "@openai/codex@${CODEX_VERSION}" "@github/copilot@${COPILOT_VERSION}"
 fi
 echo "cline $(cline --version)"
 codex --version
+copilot --version | sed -n 1p
 
 # 4.1 Cline CLI (Bun) の fetch 既定 300 秒タイムアウトを Ollama 宛てだけ外す preload
 #     BUN_OPTIONS はイメージでは ENV、native モードでは entrypoint.sh が設定する

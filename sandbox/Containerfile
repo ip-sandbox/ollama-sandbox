@@ -3,7 +3,7 @@ FROM docker.io/library/ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV OLLAMA_HOST=127.0.0.1:11434
 
-# 1〜4. 基本ツール・Node.js・Ollama・Cline CLI・Codex CLI（検証済みの版は install.sh に固定）
+# 1〜4. 基本ツール・Node.js・Ollama・Cline CLI・Codex CLI・Copilot CLI（検証済みの版は install.sh に固定）
 #    SmolLM 135M も事前に取得する（方式B: 完全オフライン対応）。
 #    native モード（scripts/launcher.py）も同じ install.sh を使う
 COPY scripts/install.sh scripts/bun-fetch-no-timeout.js /tmp/install/
@@ -14,6 +14,8 @@ RUN bash /tmp/install/install.sh --with-smollm && rm -rf /tmp/install
 ENV BUN_OPTIONS="--preload /usr/local/lib/cline/bun-fetch-no-timeout.js"
 # Cline の自動更新（起動のたびに npm から最新版を入れる）を止め、検証済みの版に固定する
 ENV CLINE_NO_AUTO_UPDATE=1
+# Copilot CLI も同じく自動更新を止める（接続先は entrypoint.sh が設定する）
+ENV COPILOT_AUTO_UPDATE=false
 
 # 5. workspace ディレクトリの作成
 RUN mkdir -p /workspace

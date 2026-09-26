@@ -122,12 +122,52 @@ trust_level = "trusted"
 EOF
 fi
 
+# --- GitHub Copilot CLI ----------------------------------------------------
+# BYOK（自前のモデル提供元）で Ollama の /v1/responses につなぐ。設定は環境変数だけで、ファイルは要らない。
+# オフラインモードにして GitHub には一切接続しない（ログイン・テレメトリ・Web ツール・自動更新が無効になる）。
+# API キーは設定しない（Ollama には不要で、設定すると失敗することがある）。
+# Copilot CLI は無音が 600 秒続くと切って最大 5 回送り直す（変更する設定は無い）。Ollama は切られるまでに
+# 処理したプロンプトをキャッシュに残すので、CPU で prefill が 600 秒を超えても送り直しのたびに続きから進む
+# （docs/results/COPILOT_RESULT.md）。
+export COPILOT_PROVIDER_BASE_URL="${COPILOT_PROVIDER_BASE_URL:-http://127.0.0.1:11434/v1}"
+export COPILOT_PROVIDER_WIRE_API="${COPILOT_PROVIDER_WIRE_API:-responses}"
+export COPILOT_MODEL="${COPILOT_MODEL:-$CLINE_MODEL}"
+export COPILOT_OFFLINE="${COPILOT_OFFLINE:-true}"
+export COPILOT_AUTO_UPDATE="${COPILOT_AUTO_UPDATE:-false}"
+# 組み込みのカタログに無いモデルは既定の上限になるので、Ollama のコンテキスト長に合わせる
+export COPILOT_PROVIDER_MAX_PROMPT_TOKENS="${COPILOT_PROVIDER_MAX_PROMPT_TOKENS:-$((OLLAMA_CONTEXT_LENGTH - 4096))}"
+export COPILOT_PROVIDER_MAX_OUTPUT_TOKENS="${COPILOT_PROVIDER_MAX_OUTPUT_TOKENS:-4096}"
+# 作業ディレクトリを信頼済みフォルダ（~/.copilot/config.json の trustedFolders）に追加し、起動時の確認を省く。
+# 既存の設定は残して追記だけする（読めない形式なら触らない）
+COPILOT_CONFIG="${COPILOT_HOME:-$HOME/.copilot}/config.json"
+echo "[entrypoint] Configuring Copilot CLI for Ollama ($COPILOT_MODEL, offline=$COPILOT_OFFLINE)..."
+mkdir -p "$(dirname "$COPILOT_CONFIG")"
+node - "$COPILOT_CONFIG" "$PWD" <<'JS' || echo "[entrypoint] Warning: $COPILOT_CONFIG を更新できませんでした（起動時にフォルダの信頼を確認されます）。" >&2
+const fs = require("fs");
+const [file, dir] = process.argv.slice(2);
+let cfg = {};
+if (fs.existsSync(file)) {
+  // Copilot CLI は先頭に // のコメント行を付けて書く
+  const body = fs.readFileSync(file, "utf8").replace(/^\s*\/\/.*$/gm, "");
+  cfg = body.trim() ? JSON.parse(body) : {};
+}
+const trusted = Array.isArray(cfg.trustedFolders) ? cfg.trustedFolders : [];
+if (!trusted.includes(dir)) {
+  cfg.trustedFolders = [...trusted, dir];
+  fs.writeFileSync(file, "// User settings belong in settings.json.\n// This file is managed automatically.\n"
+    + JSON.stringify(cfg, null, 2) + "\n");
+}
+JS
+
 cat <<EOF
 [entrypoint] Ready. model=$CLINE_MODEL
   cline                                  # Cline CLI（プロンプトは引数かパイプで渡す）
   codex                                  # Codex CLI（承認: $CODEX_APPROVAL_POLICY）
   codex -a never                         # Codex を全自動で起動（セッション中は /permissions で変更）
   codex exec -c approval_policy='"never"' "<prompt>"   # 非対話・全自動
+  copilot                                # GitHub Copilot CLI（Ollama・オフライン。ツールの実行は都度確認）
+  copilot --allow-all-tools              # Copilot を全自動で起動
+  copilot -p "<prompt>" --allow-all-tools              # 非対話・全自動
   ※ CPU 推論では 1 ターン目に 10 分以上かかることがあります
 EOF
 

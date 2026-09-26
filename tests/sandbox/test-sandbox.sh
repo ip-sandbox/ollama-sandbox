@@ -56,6 +56,10 @@ sandbox "$SANDBOX_IMAGE" \
     bash -c 'codex --version && grep -q "wire_api = \"responses\"" ~/.codex/config.toml && echo "codex config OK"'
 
 echo ""
+echo ">>> [TEST 6] Copilot CLI Offline BYOK (Ollama) Test <<<"
+sandbox "$SANDBOX_IMAGE" bash /tests/test-copilot.sh
+
+echo ""
 echo "============================================================"
 echo "  ALL SANDBOX INTEGRATION TESTS SUCCESSFULLY COMPLETED!     "
 echo "============================================================"

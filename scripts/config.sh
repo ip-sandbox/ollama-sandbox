@@ -1,9 +1,9 @@
 # config.sh - sandbox の共通設定（run.sh・テスト・launcher.py・research/ が読む唯一の定義）
 #
 # launcher.py は KEY="${KEY:-値}" の形の行を読んで既定値を取り出す。形を変えないこと。
-# 環境変数で上書きできる（例: SANDBOX_IMAGE=localhost/cline-sandbox:v4 ./scripts/run.sh）。
+# 環境変数で上書きできる（例: SANDBOX_IMAGE=localhost/cline-sandbox:v5 ./scripts/run.sh）。
 
-SANDBOX_IMAGE="${SANDBOX_IMAGE:-localhost/cline-sandbox:v4}"
+SANDBOX_IMAGE="${SANDBOX_IMAGE:-localhost/cline-sandbox:v5}"
 MODEL_VOLUME="${MODEL_VOLUME:-ollama-models}"
 
 # ネットワーク許可モード（scripts/proxy.sh）。sandbox は外に出られない内部ネットワークだけにつなぎ、

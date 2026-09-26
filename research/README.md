@@ -8,9 +8,9 @@ sandbox 本体（`scripts/` `sandbox/`）の動作には不要な、調査・計
 | フォルダ | 役割 | 主なファイル |
 |---|---|---|
 | `host/` | ホスト上で Cline / Ollama を動かす（コンテナを使わない検証） | `setup-host.sh`（Node 22・cline・venv・ollama の用意）、`ollama-host.sh`、`set-timeout.sh`、`run-e2e.sh`、`bench_prefill.py` |
-| `stubs/` | 偽 Ollama で、どの層が何秒で切るかを実モデル無しで測る | `slow_ollama_stub.py`、`probe-timeout.sh`（Cline）、`probe-codex-timeout.sh`（Codex）、`container-probe.sh`、`bun_fetch_probe.js`、`sse_timing.py` |
-| `e2e/` | sandbox イメージの既定設定のまま、実モデルで実タスクを走らせる | `e2e.sh --agent cline\|codex [--model M] [--codex-catalog DUMP] [--debug]` |
-| `models/` | モデル個別の調査 | `devstral-probe.sh` / `devstral_probe.py`（ツール呼び出しと速度）、`probe-apply-patch.sh` / `make_codex_catalog.py`（Codex の apply_patch） |
+| `stubs/` | 偽 Ollama で、どの層が何秒で切るかを実モデル無しで測る | `slow_ollama_stub.py`、`probe-timeout.sh`（Cline）、`probe-codex-timeout.sh`（Codex）、`probe-copilot-timeout.sh`（Copilot）、`container-probe.sh`、`bun_fetch_probe.js`、`sse_timing.py` |
+| `e2e/` | sandbox の既定設定のまま、実モデルで実タスクを走らせる（コンテナ / native の両方） | `e2e.sh --agent cline\|codex\|copilot [--backend podman\|native] [--model M] [--codex-catalog DUMP] [--debug]`、`native-sim.sh setup|exec|rm`（native 用の模擬コンテナ） |
+| `models/` | モデル個別の調査 | `devstral-probe.sh` / `devstral_probe.py`（ツール呼び出しと速度）、`probe-cancel-cache.sh`（切断後の送り直しで prefill が続きから進むか）、`probe-apply-patch.sh` / `make_codex_catalog.py`（Codex の apply_patch） |
 
 ## 旧 `cpu-timeout/` などからの対応
 

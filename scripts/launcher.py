@@ -126,7 +126,7 @@ def ensure_prerequisites() -> None:
 
 
 def ensure_native_tools() -> None:
-    """Ollama・Cline・Codex が検証済みの版で入っていなければ、install.sh で入れる。"""
+    """Ollama・Cline・Codex・Copilot が検証済みの版で入っていなければ、install.sh で入れる。"""
     # 子プロセス（cline --version など）に、メニューへの入力を読ませない
     check = subprocess.run(
         ["bash", str(INSTALL_SCRIPT), "--check"], stdin=subprocess.DEVNULL, cwd=ROOT
@@ -135,7 +135,7 @@ def ensure_native_tools() -> None:
         return
     if os.geteuid() != 0:
         raise RuntimeError(f"root で `bash {INSTALL_SCRIPT}` を実行してから、もう一度起動してください。")
-    print("\nnative モードには Ollama・Cline CLI・Codex CLI が必要です（ネットワークから取得します）。")
+    print("\nnative モードには Ollama・Cline CLI・Codex CLI・Copilot CLI が必要です（ネットワークから取得します）。")
     confirmation = select_option(
         f"{INSTALL_SCRIPT.relative_to(ROOT)} を実行してインストールしますか？",
         [("インストールする", True), ("終了", False)],
@@ -240,7 +240,7 @@ def container_command(
     podman: 使い捨てのコンテナで実行する。
     native: コンテナを使わず entrypoint.sh を直接実行する（mounts と network は使わない）。
             HOME の設定が残るので、agent_setup（sandbox の起動）のとき以外は
-            Cline / Codex の設定を書き換えない（SANDBOX_SKIP_AGENT_SETUP）。
+            Cline / Codex / Copilot の設定を書き換えない（SANDBOX_SKIP_AGENT_SETUP）。
     """
     if BACKEND == "native":
         setup = [] if agent_setup else ["SANDBOX_SKIP_AGENT_SETUP=1"]

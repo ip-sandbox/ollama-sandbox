@@ -124,7 +124,7 @@ class ConfigAndModelsTests(unittest.TestCase):
         with patch.dict(launcher.os.environ, {}, clear=True):
             config = launcher.load_config()
 
-        self.assertEqual(config["SANDBOX_IMAGE"], "localhost/cline-sandbox:v4")
+        self.assertEqual(config["SANDBOX_IMAGE"], "localhost/cline-sandbox:v5")
         self.assertEqual(config["MODEL_VOLUME"], "ollama-models")
         self.assertIn("SANDBOX_PROXY_IMAGE", config)
 

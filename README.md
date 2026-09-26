@@ -1,6 +1,6 @@
-# Cline CLI / Codex CLI + Ollama Podman Sandbox
+# Cline CLI / Codex CLI / Copilot CLI + Ollama Podman Sandbox
 
-Linux (x86_64) 環境向けに、AIコーディングエージェント Cline CLI・Codex CLI と超小型ローカルLLM（Ollama + SmolLM 135M）を同一の Podman コンテナ内に隔離して実行するサンドボックス環境です。
+Linux (x86_64) 環境向けに、AIコーディングエージェント Cline CLI・Codex CLI・GitHub Copilot CLI と超小型ローカルLLM（Ollama + SmolLM 135M）を同一の Podman コンテナ内に隔離して実行するサンドボックス環境です。
 
 `--network=none` により、コンテナから外部インターネットやLANへの通信を完全に遮断しつつ、コンテナ内部の loopback (`127.0.0.1`) を介して各エージェントと Ollama 間の推論通信を成立させます。
 
@@ -19,7 +19,7 @@ Linux Host
 │   └── workspace/              ← ホスト側の作業ディレクトリ（中身は git 管理外）
 ├── tests/
 │   ├── unit/                   ← launcher の unit test
-│   └── sandbox/                ← コンテナの統合テスト
+│   └── sandbox/                ← 統合テスト（コンテナ: test-sandbox.sh、native モード: test-native.sh）
 ├── research/                   ← 検証・計測用のスクリプト（sandbox の動作には不要）
 ├── docs/
 │   ├── plans/                  ← 計画書
@@ -27,9 +27,10 @@ Linux Host
 │
 └── Podman (--network=none)
     │
-    └── Cline Sandbox Container (cline-sandbox:v4)
+    └── Cline Sandbox Container (cline-sandbox:v5)
         ├── Cline CLI (v3.0.64 / Node.js 22 LTS)
         ├── Codex CLI (v0.156.1)
+        ├── GitHub Copilot CLI (v1.0.88 / BYOK・オフライン)
         ├── Ollama Server (v0.34.2)
         ├── Ollama model volume (選択したモデルを事前キャッシュ)
         ├── /workspace (マウント)
@@ -47,6 +48,7 @@ Linux Host
 * **Node.js**: v22.23.2
 * **Cline CLI**: 3.0.64
 * **Codex CLI**: 0.156.1
+* **GitHub Copilot CLI**: 1.0.88
 * **Ollama**: 0.34.2
 * **初期疎通用LLM**: SmolLM 135M (~91MB / イメージに焼き込み)
 
@@ -104,7 +106,7 @@ python3 -m unittest discover -s tests/unit -v
 ### 1. サンドボックスコンテナのビルド
 
 ```bash
-podman build -t cline-sandbox:v4 -f sandbox/Containerfile sandbox
+podman build -t cline-sandbox:v5 -f sandbox/Containerfile sandbox
 ```
 
 ※イメージ内には初期疎通用の `smollm:135m` が焼き込まれています。実用モデルはTUIランチャーでnamed volumeへ事前ダウンロードしてください。
@@ -121,6 +123,14 @@ podman build -t cline-sandbox:v4 -f sandbox/Containerfile sandbox
 * **オフライン推論**: 完全ネットワーク遮断下で SmolLM 135M が推論を返せること
 * **Cline CLI 疎通**: Cline CLI が正常に起動すること
 * **Codex CLI 起動・設定**: Codex CLI が起動し、Ollama 向けの設定が生成されていること
+* **Copilot CLI 接続**: Copilot CLI がオフラインで起動し、リクエストがコンテナ内の Ollama に届くこと
+
+native モード（後述）の統合テストは、Colab の端末を模したコンテナ（素の ubuntu:22.04 に install.sh を当てたもの）の中で、launcher が組み立てるコマンドをそのまま実行します。
+
+```bash
+./research/e2e/native-sim.sh setup     # 模擬コンテナを作り install.sh を実行する（初回のみ。削除は rm）
+./tests/sandbox/test-native.sh         # 初回は smollm:135m をネットワークから model volume に取得する
+```
 
 ネットワーク許可モード（後述）のテストは、外部に接続するため別になっています。
 
@@ -134,7 +144,7 @@ podman build -t cline-sandbox:v4 -f sandbox/Containerfile sandbox
 ./scripts/run.sh
 ```
 
-コンテナ内に入り、`cline` または `codex` コマンドで対話操作やタスク実行が可能です。起動時に使い方が表示されます。
+コンテナ内に入り、`cline`・`codex`・`copilot` のどれかのコマンドで対話操作やタスク実行が可能です。起動時に使い方が表示されます。
 
 ```bash
 cline                                         # Cline CLI（Ollama 設定済み。-P 指定は不要）
@@ -142,7 +152,12 @@ echo "<prompt>" | cline                       # 非対話（日本語は引数�
 codex                                         # Codex CLI（承認ポリシー: on-request）
 codex -a never                                # Codex を全自動で起動（セッション中は /permissions で変更）
 codex exec -c approval_policy='"never"' "<prompt>"   # 非対話・全自動
+copilot                                       # GitHub Copilot CLI（Ollama・オフライン。ツールの実行は都度確認）
+copilot --allow-all-tools                     # Copilot を全自動で起動
+copilot -p "<prompt>" --allow-all-tools       # 非対話・全自動
 ```
+
+Copilot CLI は BYOK（自前のモデル提供元）で Ollama を使い、オフラインモードで動きます。GitHub アカウントやサブスクリプションは不要で、GitHub には一切接続しません（ログイン・テレメトリ・Web 検索・GitHub MCP サーバーは使えません）。
 
 コマンドを直接渡す場合は、使うモデルを `CLINE_MODEL` で指定します: `CLINE_MODEL=qwen3:8b ./scripts/run.sh cline`
 
@@ -171,7 +186,7 @@ sandbox ──(内部ネットワーク: 外への経路も外部 DNS も無い)
   * `CONNECT ... host:443` は接続の要求、`Proxying refused on filtered domain "..."` は拒否を表します。
   * ファイルは自動では消えないので、不要になったら削除してください。
 * `sandbox/proxy/tinyproxy.conf` と `allowlist` は起動時にマウントされるので、変更にイメージの再ビルドは要りません。
-* Cline のテレメトリ（`*.cline.bot`）や Codex の `chatgpt.com` への接続は、許可リストに無いので拒否されます。
+* Cline のテレメトリ（`*.cline.bot`）や Codex の `chatgpt.com` への接続は、許可リストに無いので拒否されます。Copilot CLI はこのモードでもオフラインのままで、GitHub には接続しません。
 
 ★ **Codex の `web_search` は、このモードでも使えません。** Codex は `web_search` を OpenAI のサーバー側で実行するツールとして送りますが、Ollama は検索を実行しないためです。外部の情報が必要な場合は、許可したドメインから `curl` などで取得させてください。
 
@@ -183,18 +198,18 @@ sandbox ──(内部ネットワーク: 外への経路も外部 DNS も無い)
 python3 scripts/launcher.py        # podman が無ければ自動で native モードになる
 ```
 
-1. 起動すると、Ollama・Cline CLI・Codex CLI が検証済みの版で入っているかを確かめます。
+1. 起動すると、Ollama・Cline CLI・Codex CLI・Copilot CLI が検証済みの版で入っているかを確かめます。
    * 入っていなければ、`sandbox/scripts/install.sh` の実行を尋ねます。root で実行する必要があります。
    * install.sh は sandbox イメージのビルドと同じもので、apt・Node.js 22・Ollama・npm を使います。
 2. メニューはコンテナ版と同じです。
    * 「モデルをダウンロード」は `models.json` のモデルを `NATIVE_MODELS_DIR`（既定 `~/.ollama/models`）に取得します。Devstral の取り込みも同じように動きます。
-   * 「sandboxを起動」は、`NATIVE_WORKSPACE`（既定 `sandbox/workspace`）でシェルを開きます。そのシェルでは `cline` と `codex` が選んだモデルを使うように設定されています。
+   * 「sandboxを起動」は、`NATIVE_WORKSPACE`（既定 `sandbox/workspace`）でシェルを開きます。そのシェルでは `cline`・`codex`・`copilot` が選んだモデルを使うように設定されています。
 
 | 設定（`scripts/config.sh`、環境変数で上書き可） | 既定 | 内容 |
 |---|---|---|
 | `SANDBOX_BACKEND` | `auto` | `auto`（podman があれば podman）/ `podman` / `native` |
 | `NATIVE_MODELS_DIR` | `$HOME/.ollama/models` | モデルの置き場所 |
-| `NATIVE_WORKSPACE` | `sandbox/workspace` | 起動するシェルの作業ディレクトリ（Codex はここを信頼済みにする） |
+| `NATIVE_WORKSPACE` | `sandbox/workspace` | 起動するシェルの作業ディレクトリ（Codex と Copilot はここを信頼済みにする） |
 
 ★ **native モードには、このリポジトリによる隔離がありません。**
 * `--network=none` やネットワーク許可モードに当たるものは無く、外側の環境の制限だけが効きます。
@@ -205,6 +220,7 @@ python3 scripts/launcher.py        # podman が無ければ自動で native モ�
 * **設定の書き換え:**
   * Cline は、`~/.cline` の Ollama プロバイダを起動のたびに選んだモデルへ書き換えます。
   * Codex は、`~/.codex/config.toml` を起動のたびに作り直します。ただし、この entrypoint が作ったもの以外（利用者自身の設定）には触りません。その場合は警告が出るので、`CODEX_HOME=<別ディレクトリ>` を指定してください。
+  * Copilot は、`~/.copilot/config.json` の信頼済みフォルダに作業ディレクトリを追記するだけです。接続先は環境変数で渡すので、その他の設定には触りません。
 * GPU があれば、Ollama が自動で使います。
 * python3 が必要です（launcher と、Devstral の取り込みで使います）。
 
@@ -216,9 +232,10 @@ python3 scripts/launcher.py        # podman が無ければ自動で native モ�
 |---|---|
 | Ollama | `OLLAMA_CONTEXT_LENGTH=32768`（Codex は `num_ctx` を送らないため必須。CPU の既定 4k では黙って切り詰められる）、`OLLAMA_KEEP_ALIVE=-1`（prompt cache 維持）、`OLLAMA_LOAD_TIMEOUT=30m` |
 | Cline | `~/.cline/data/settings/providers.json` に Ollama プロバイダを登録し、リクエストタイムアウト `timeout=1800000`（30 分）を設定。Bun fetch の既定 300 秒は `BUN_OPTIONS` の preload（`/usr/local/lib/cline/bun-fetch-no-timeout.js`）で外す。起動のたびに npm から最新版を入れる自動更新は `CLINE_NO_AUTO_UPDATE=1` で止め、版を固定する |
+| Copilot | 環境変数で BYOK を設定: `COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:11434/v1`、`COPILOT_PROVIDER_WIRE_API=responses`、`COPILOT_MODEL`（選んだモデル）、`COPILOT_OFFLINE=true`、`COPILOT_AUTO_UPDATE=false`、`COPILOT_PROVIDER_MAX_PROMPT_TOKENS`（コンテキスト長 − 4096）。作業ディレクトリを `~/.copilot/config.json` の `trustedFolders` に追記する。Copilot は無音が 600 秒続くと切って最大 5 回送り直す（変更できない）が、Ollama は処理済みのプロンプトをキャッシュに残すので、prefill が 600 秒を超えても続きから進む |
 | Codex | `~/.codex/config.toml` に、プロバイダ `ollama-local`（`ollama` は予約済み）、`wire_api = "responses"`、`sandbox_mode = "danger-full-access"`（コンテナ自体が隔離境界。Codex の seccomp/landlock はコンテナ内で動かない）、`approval_policy = "on-request"` を設定 |
 
-いずれも `podman run -e` で上書きできます: `OLLAMA_CONTEXT_LENGTH` / `OLLAMA_KEEP_ALIVE` / `CLINE_TIMEOUT_MS` / `CODEX_APPROVAL_POLICY`（`never` で全自動）/ `CODEX_STREAM_IDLE_TIMEOUT_MS`
+いずれも `podman run -e` で上書きできます: `OLLAMA_CONTEXT_LENGTH` / `OLLAMA_KEEP_ALIVE` / `CLINE_TIMEOUT_MS` / `CODEX_APPROVAL_POLICY`（`never` で全自動）/ `CODEX_STREAM_IDLE_TIMEOUT_MS` / `COPILOT_*`
 
 ### CPU 推論の所要時間（Ryzen 5 PRO 4650G 4 コア）
 
@@ -228,6 +245,7 @@ prefill（プロンプト処理）は約 8 tok/s です。**1 ターン目はエ
 |---|---:|---:|---:|---:|
 | Cline | 約 4,500 tok | 約 9 分 | 20〜55 秒 | 約 10〜11 分 |
 | Codex | 約 8,400 tok | 約 18 分 | 25〜30 秒 | 約 19 分 |
+| Copilot | 約 10,500 tok | 約 20 分（600 秒ごとに切断・送り直しを挟む） | 30〜50 秒 | 約 22〜27 分 |
 
 上表は gemma4:12b-it-qat の値です。他のモデルの hello.txt タスク全体の所要時間:
 
@@ -236,6 +254,8 @@ prefill（プロンプト処理）は約 8 tok/s です。**1 ターン目はエ
 | gemma4:12b-it-qat | 約 8 tok/s | 約 10 分 | 約 19 分 |
 | gpt-oss:20b | 約 20 tok/s | 約 5 分 | 約 21 分（apply_patch の失敗を 4 回挟む） |
 | devstral-small-2:24b-iq4_xs | 約 4.6 tok/s | 約 20 分 | 約 28 分 |
+
+Copilot CLI（hello.txt タスク全体）: qwen3:8b 約 21〜24 分、gemma4:12b-it-qat 約 22〜27 分、devstral 約 46〜47 分（コンテナ・native とも成功）。**gpt-oss:20b は Copilot では失敗します**（ファイル編集の `apply_patch` を Ollama が扱えない。`docs/results/COPILOT_RESULT.md`）。
 
 devstral は Cline の 1 ターン目が約 19 分で、既定のリクエストタイムアウト（30 分）に近いです。長い指示を渡す場合は `-e CLINE_TIMEOUT_MS=3600000` で延ばしてください。
 
@@ -248,6 +268,7 @@ devstral は Cline の 1 ターン目が約 19 分で、既定のリクエスト
 | `docs/results/MODEL_E2E_RESULT.md` / `MODEL_E2E_CODEX_RESULT.md` | gpt-oss / mistral-nemo × Cline / Codex |
 | `docs/results/APPLY_PATCH_RESULT.md` | Codex + Ollama で apply_patch が失敗する原因 |
 | `docs/results/DEVSTRAL_RESULT.md` | Devstral Small 2 24B IQ4_XS の取り込みと検証 |
+| `docs/results/COPILOT_RESULT.md` | Copilot CLI の組み込み（タイムアウトの実測）と、各モデル × コンテナ / native の検証 |
 | `docs/plans/` | 各作業の計画書 |
 | `research/README.md` | 検証スクリプトの使い方（旧 `cpu-timeout/` からの対応表あり） |
 
