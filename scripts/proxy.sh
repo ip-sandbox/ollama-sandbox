@@ -16,12 +16,18 @@
 #     先につながないと、proxy の名前解決が内部ネットワーク側の DNS（外部名を解決しない）に向いてしまう。
 #   - sandbox には HTTP(S)_PROXY と NO_PROXY=127.0.0.1,localhost を渡す。
 #     Cline / Codex からコンテナ内 Ollama への通信はプロキシを通らない。
+#   - アクセスログは $PROXY_LOG_DIR/tinyproxy.log に追記する（プロキシを止めても残る）。
+#     tinyproxy は tinyproxy ユーザーに権限を落としてからログを開くので、--userns=keep-id で
+#     ホストの利用者をそのユーザーに対応させ、ホスト側のディレクトリに書けるようにする。
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$DIR/scripts/config.sh"
 ALLOWLIST="$DIR/sandbox/proxy/allowlist"
+PROXY_CONF="$DIR/sandbox/proxy/tinyproxy.conf"
 PROXY_URL="http://$SANDBOX_PROXY_NAME:8888"
+PROXY_LOG_DIR="${SANDBOX_PROXY_LOG_DIR:-$DIR/sandbox/proxy/logs}"
+PROXY_LOG="$PROXY_LOG_DIR/tinyproxy.log"
 NO_PROXY_HOSTS="127.0.0.1,localhost,::1"
 
 ensure_network() {  # ensure_network <name> [--internal]
@@ -35,15 +41,23 @@ up() {
   fi
   ensure_network "$SANDBOX_INTERNAL_NET" --internal
   ensure_network "$SANDBOX_EGRESS_NET"
+  mkdir -p "$PROXY_LOG_DIR"
   if [ "$(podman container inspect -f '{{.State.Running}}' "$SANDBOX_PROXY_NAME" 2>/dev/null)" != true ]; then
     podman rm -f "$SANDBOX_PROXY_NAME" >/dev/null 2>&1 || true
+    local uid gid
+    uid="$(podman run --rm --entrypoint id "$SANDBOX_PROXY_IMAGE" -u tinyproxy)"
+    gid="$(podman run --rm --entrypoint id "$SANDBOX_PROXY_IMAGE" -g tinyproxy)"
     # 出口ネットワークを先に指定する（DNS の順序。冒頭のコメント参照）
     podman run -d --rm --name "$SANDBOX_PROXY_NAME" \
       --network "$SANDBOX_EGRESS_NET" --network "$SANDBOX_INTERNAL_NET" \
+      --userns="keep-id:uid=$uid,gid=$gid" \
+      -v "$PROXY_CONF:/etc/tinyproxy/tinyproxy.conf:ro" \
       -v "$ALLOWLIST:/etc/tinyproxy/allowlist:ro" \
+      -v "$PROXY_LOG_DIR:/var/log/tinyproxy" \
       "$SANDBOX_PROXY_IMAGE" >/dev/null
   fi
   echo "[proxy] 起動中: $SANDBOX_PROXY_NAME（許可リスト: $ALLOWLIST）"
+  echo "[proxy] アクセスログ: $PROXY_LOG"
 }
 
 down() {
@@ -61,8 +75,9 @@ status() {
   podman ps -a --filter "name=^$SANDBOX_PROXY_NAME\$" --format '{{.Names}} {{.Status}}'
   echo "許可リスト:"
   grep -vE '^\s*(#|$)' "$ALLOWLIST" | sed 's/^/  /'
+  echo "アクセスログ: $PROXY_LOG"
   echo "最近の拒否:"
-  podman logs "$SANDBOX_PROXY_NAME" 2>&1 | grep -E 'refused on filtered' | tail -10 | sed 's/^/  /' || true
+  grep -E 'refused on filtered' "$PROXY_LOG" 2>/dev/null | tail -10 | sed 's/^/  /' || true
 }
 
 run_sandbox() {

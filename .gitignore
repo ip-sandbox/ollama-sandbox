@@ -5,3 +5,6 @@ __pycache__/
 # エージェントの作業領域。中身は管理せず、ディレクトリだけ残す
 sandbox/workspace/*
 !sandbox/workspace/.gitkeep
+
+# ネットワーク許可モードのプロキシのアクセスログ（scripts/proxy.sh）
+sandbox/proxy/logs/

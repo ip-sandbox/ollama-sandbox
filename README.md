@@ -14,7 +14,7 @@ Linux Host
 ├── scripts/                    ← 起動と準備（run.sh, launcher.py, config.sh, models.json, proxy.sh, import_gguf_model.sh）
 ├── sandbox/
 │   ├── Containerfile           ← sandbox イメージ
-│   ├── scripts/                ← entrypoint.sh ほか、イメージに入るファイル
+│   ├── scripts/                ← install.sh・entrypoint.sh ほか、イメージに入るファイル（native モードでも使う）
 │   ├── proxy/                  ← ネットワーク許可モード用のプロキシ（allowlist で接続先を指定）
 │   └── workspace/              ← ホスト側の作業ディレクトリ（中身は git 管理外）
 ├── tests/
@@ -27,7 +27,7 @@ Linux Host
 │
 └── Podman (--network=none)
     │
-    └── Cline Sandbox Container (cline-sandbox:v3)
+    └── Cline Sandbox Container (cline-sandbox:v4)
         ├── Cline CLI (v3.0.64 / Node.js 22 LTS)
         ├── Codex CLI (v0.156.1)
         ├── Ollama Server (v0.34.2)
@@ -104,7 +104,7 @@ python3 -m unittest discover -s tests/unit -v
 ### 1. サンドボックスコンテナのビルド
 
 ```bash
-podman build -t cline-sandbox:v3 -f sandbox/Containerfile sandbox
+podman build -t cline-sandbox:v4 -f sandbox/Containerfile sandbox
 ```
 
 ※イメージ内には初期疎通用の `smollm:135m` が焼き込まれています。実用モデルはTUIランチャーでnamed volumeへ事前ダウンロードしてください。
@@ -154,6 +154,7 @@ codex exec -c approval_policy='"never"' "<prompt>"   # 非対話・全自動
 ./scripts/run.sh                                  # ランチャーで「sandboxを起動（ネットワーク許可: 許可リストのみ）」を選ぶ
 SANDBOX_NETWORK=proxy CLINE_MODEL=qwen3:8b ./scripts/run.sh bash   # 直接起動する場合
 ./scripts/proxy.sh status                         # 許可リストと、最近拒否した接続先を表示
+tail -f sandbox/proxy/logs/tinyproxy.log          # アクセスログ（sandbox の終了後も残る）
 ```
 
 ```text
@@ -165,9 +166,47 @@ sandbox ──(内部ネットワーク: 外への経路も外部 DNS も無い)
 * 許可リストは既定で PyPI、npm、GitHub です。編集すると、次の起動から反映されます（再ビルド不要）。
 * sandbox には `HTTP(S)_PROXY` と `NO_PROXY=127.0.0.1,localhost` を渡します。Cline / Codex からコンテナ内の Ollama への通信はプロキシを通りません。
 * プロキシのイメージは初回起動時に自動でビルドされ、sandbox の終了時にプロキシも停止します。
+* **アクセスログ**は、ホスト側の `sandbox/proxy/logs/tinyproxy.log` に追記されます。
+  * 保存先は `SANDBOX_PROXY_LOG_DIR` で変えられます。git の管理外です。
+  * `CONNECT ... host:443` は接続の要求、`Proxying refused on filtered domain "..."` は拒否を表します。
+  * ファイルは自動では消えないので、不要になったら削除してください。
+* `sandbox/proxy/tinyproxy.conf` と `allowlist` は起動時にマウントされるので、変更にイメージの再ビルドは要りません。
 * Cline のテレメトリ（`*.cline.bot`）や Codex の `chatgpt.com` への接続は、許可リストに無いので拒否されます。
 
 ★ **Codex の `web_search` は、このモードでも使えません。** Codex は `web_search` を OpenAI のサーバー側で実行するツールとして送りますが、Ollama は検索を実行しないためです。外部の情報が必要な場合は、許可したドメインから `curl` などで取得させてください。
+
+### 5. すでにコンテナ内の環境で使う（native モード）
+
+開発コンテナや Colab の端末のように、すでにコンテナの中にいる環境では、Podman を入れ子で動かせません。この場合、launcher はコンテナを使わず、同じ手順を直接実行します（native モード）。
+
+```bash
+python3 scripts/launcher.py        # podman が無ければ自動で native モードになる
+```
+
+1. 起動すると、Ollama・Cline CLI・Codex CLI が検証済みの版で入っているかを確かめます。
+   * 入っていなければ、`sandbox/scripts/install.sh` の実行を尋ねます。root で実行する必要があります。
+   * install.sh は sandbox イメージのビルドと同じもので、apt・Node.js 22・Ollama・npm を使います。
+2. メニューはコンテナ版と同じです。
+   * 「モデルをダウンロード」は `models.json` のモデルを `NATIVE_MODELS_DIR`（既定 `~/.ollama/models`）に取得します。Devstral の取り込みも同じように動きます。
+   * 「sandboxを起動」は、`NATIVE_WORKSPACE`（既定 `sandbox/workspace`）でシェルを開きます。そのシェルでは `cline` と `codex` が選んだモデルを使うように設定されています。
+
+| 設定（`scripts/config.sh`、環境変数で上書き可） | 既定 | 内容 |
+|---|---|---|
+| `SANDBOX_BACKEND` | `auto` | `auto`（podman があれば podman）/ `podman` / `native` |
+| `NATIVE_MODELS_DIR` | `$HOME/.ollama/models` | モデルの置き場所 |
+| `NATIVE_WORKSPACE` | `sandbox/workspace` | 起動するシェルの作業ディレクトリ（Codex はここを信頼済みにする） |
+
+★ **native モードには、このリポジトリによる隔離がありません。**
+* `--network=none` やネットワーク許可モードに当たるものは無く、外側の環境の制限だけが効きます。
+* エージェントは、その環境で自分が読み書きできるファイルすべてを操作できます。例えば Colab で Google Drive をマウントしていると、Drive のファイルも消せます。
+
+その他の注意:
+* **Ollama の serve は起動したまま残ります。** 次の起動やモデル操作でそのまま使い回します。止めるには `pkill -x ollama` を実行してください。
+* **設定の書き換え:**
+  * Cline は、`~/.cline` の Ollama プロバイダを起動のたびに選んだモデルへ書き換えます。
+  * Codex は、`~/.codex/config.toml` を起動のたびに作り直します。ただし、この entrypoint が作ったもの以外（利用者自身の設定）には触りません。その場合は警告が出るので、`CODEX_HOME=<別ディレクトリ>` を指定してください。
+* GPU があれば、Ollama が自動で使います。
+* python3 が必要です（launcher と、Devstral の取り込みで使います）。
 
 ---
 
@@ -176,7 +215,7 @@ sandbox ──(内部ネットワーク: 外への経路も外部 DNS も無い)
 | 対象 | 内容 |
 |---|---|
 | Ollama | `OLLAMA_CONTEXT_LENGTH=32768`（Codex は `num_ctx` を送らないため必須。CPU の既定 4k では黙って切り詰められる）、`OLLAMA_KEEP_ALIVE=-1`（prompt cache 維持）、`OLLAMA_LOAD_TIMEOUT=30m` |
-| Cline | `~/.cline/data/settings/providers.json` に Ollama プロバイダを登録し、リクエストタイムアウト `timeout=1800000`（30 分）を設定。Bun fetch の既定 300 秒は `BUN_OPTIONS` の preload（`/usr/local/lib/cline/bun-fetch-no-timeout.js`）で外す |
+| Cline | `~/.cline/data/settings/providers.json` に Ollama プロバイダを登録し、リクエストタイムアウト `timeout=1800000`（30 分）を設定。Bun fetch の既定 300 秒は `BUN_OPTIONS` の preload（`/usr/local/lib/cline/bun-fetch-no-timeout.js`）で外す。起動のたびに npm から最新版を入れる自動更新は `CLINE_NO_AUTO_UPDATE=1` で止め、版を固定する |
 | Codex | `~/.codex/config.toml` に、プロバイダ `ollama-local`（`ollama` は予約済み）、`wire_api = "responses"`、`sandbox_mode = "danger-full-access"`（コンテナ自体が隔離境界。Codex の seccomp/landlock はコンテナ内で動かない）、`approval_policy = "on-request"` を設定 |
 
 いずれも `podman run -e` で上書きできます: `OLLAMA_CONTEXT_LENGTH` / `OLLAMA_KEEP_ALIVE` / `CLINE_TIMEOUT_MS` / `CODEX_APPROVAL_POLICY`（`never` で全自動）/ `CODEX_STREAM_IDLE_TIMEOUT_MS`

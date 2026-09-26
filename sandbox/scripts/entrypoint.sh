@@ -16,59 +16,92 @@ export OLLAMA_LOAD_TIMEOUT="${OLLAMA_LOAD_TIMEOUT:-30m}"
 export OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:--1}"
 export OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-32768}"
 
-# Ollama サーバーをバックグラウンドで起動
-echo "[entrypoint] Starting Ollama server in background..."
-ollama serve > /var/log/ollama.log 2>&1 &
-OLLAMA_PID=$!
+# Ollama サーバーをバックグラウンドで起動する。
+# native モード（コンテナを使わず launcher.py から実行）では、すでに起動している serve を使い回す
+OLLAMA_LOG="${OLLAMA_LOG:-/var/log/ollama.log}"
+if ! { : >>"$OLLAMA_LOG"; } 2>/dev/null; then
+    OLLAMA_LOG="$HOME/.ollama/serve.log"
+    mkdir -p "$(dirname "$OLLAMA_LOG")"
+fi
+if curl -s http://127.0.0.1:11434/api/tags > /dev/null 2>&1; then
+    echo "[entrypoint] Ollama server is already running."
+else
+    echo "[entrypoint] Starting Ollama server in background (log: $OLLAMA_LOG)..."
+    # 別セッションにして、端末の Ctrl-C（エージェントの中断）で serve まで止まらないようにする
+    setsid ollama serve < /dev/null > "$OLLAMA_LOG" 2>&1 &
 
-# Ollama API のヘルスチェック（起動完了待ち）
-echo "[entrypoint] Waiting for Ollama API to be ready..."
-TIMEOUT=30
-COUNT=0
-until curl -s http://127.0.0.1:11434/api/tags > /dev/null 2>&1; do
-    sleep 1
-    COUNT=$((COUNT + 1))
-    if [ $COUNT -ge $TIMEOUT ]; then
-        echo "[entrypoint] Error: Timeout waiting for Ollama server."
-        cat /var/log/ollama.log
-        exit 1
-    fi
-done
-echo "[entrypoint] Ollama API is ready."
+    # Ollama API のヘルスチェック（起動完了待ち）
+    echo "[entrypoint] Waiting for Ollama API to be ready..."
+    TIMEOUT=30
+    COUNT=0
+    until curl -s http://127.0.0.1:11434/api/tags > /dev/null 2>&1; do
+        sleep 1
+        COUNT=$((COUNT + 1))
+        if [ $COUNT -ge $TIMEOUT ]; then
+            echo "[entrypoint] Error: Timeout waiting for Ollama server."
+            cat "$OLLAMA_LOG"
+            exit 1
+        fi
+    done
+    echo "[entrypoint] Ollama API is ready."
+fi
+
+# モデルの管理（ollama list / pull / rm など）だけのときは、Cline / Codex の設定を飛ばす。
+# native モードの launcher.py が指定する（HOME の設定を、起動中のモデル以外に書き換えないため）
+if [ "${SANDBOX_SKIP_AGENT_SETUP:-0}" = 1 ] && [ $# -gt 0 ]; then
+    exec "$@"
+fi
 
 # --- Cline CLI -------------------------------------------------------------
-# 3.x の設定は ~/.cline/data/settings/providers.json。cline auth に作らせてから、
-# Ollama リクエストのタイムアウト（settings.timeout, ms。既定 300000）を延ばす。
-# Bun fetch 側の 300 秒は Containerfile の BUN_OPTIONS preload で外している。
+# 3.x の設定は ~/.cline/data/settings/providers.json。初回は cline auth に作らせる。
+# 毎回、モデルと Ollama リクエストのタイムアウト（settings.timeout, ms。既定 300000）を合わせる
+# （native モードでは HOME が残るので、モデルを切り替えたときに古い設定を使わないように）。
+# Bun fetch 側の 300 秒は BUN_OPTIONS の preload で外す（イメージでは Containerfile の ENV）。
+# Cline の自動更新（起動のたびに npm から最新版を入れる）は止めて、検証済みの版に固定する
+export CLINE_NO_AUTO_UPDATE="${CLINE_NO_AUTO_UPDATE:-1}"
+CLINE_PRELOAD=/usr/local/lib/cline/bun-fetch-no-timeout.js
+if [ -z "${BUN_OPTIONS:-}" ] && [ -f "$CLINE_PRELOAD" ]; then
+    export BUN_OPTIONS="--preload $CLINE_PRELOAD"
+fi
 CLINE_TIMEOUT_MS="${CLINE_TIMEOUT_MS:-1800000}"
 CLINE_PROVIDERS="$HOME/.cline/data/settings/providers.json"
+echo "[entrypoint] Configuring Cline for Ollama ($CLINE_MODEL, timeout ${CLINE_TIMEOUT_MS}ms)..."
 if ! grep -q '"ollama"' "$CLINE_PROVIDERS" 2>/dev/null; then
-    echo "[entrypoint] Configuring Cline for Ollama ($CLINE_MODEL, timeout ${CLINE_TIMEOUT_MS}ms)..."
     cline auth -p ollama -m "$CLINE_MODEL" -k ollama > /dev/null
-    node - "$CLINE_PROVIDERS" "$CLINE_TIMEOUT_MS" <<'JS'
+fi
+node - "$CLINE_PROVIDERS" "$CLINE_MODEL" "$CLINE_TIMEOUT_MS" <<'JS'
 const fs = require("fs");
-const [pj, ms] = process.argv.slice(2);
+const [pj, model, ms] = process.argv.slice(2);
 const cfg = JSON.parse(fs.readFileSync(pj, "utf8"));
+cfg.providers.ollama.settings.model = model;
 cfg.providers.ollama.settings.timeout = Number(ms);
 cfg.lastUsedProvider = "ollama";
 fs.writeFileSync(pj, JSON.stringify(cfg, null, 2) + "\n");
 JS
-fi
 
 # --- Codex CLI -------------------------------------------------------------
 # プロバイダ ID "ollama" は Codex の組み込みで予約済みなので ollama-local とする。
 # wire_api は "responses" のみ有効（"chat" は 0.154 以降起動時に拒否される）。
-# コンテナ自体が隔離境界であり、Codex の seccomp/landlock はコンテナ内で動かないため
+# コンテナ（native モードでは外側のコンテナ）自体が隔離境界であり、Codex の seccomp/landlock はコンテナ内で動かないため
 # sandbox_mode は danger-full-access。承認は既定 on-request。全自動にするには
 #   起動時 -e CODEX_APPROVAL_POLICY=never / codex -a never / codex exec -c approval_policy='"never"'
 #   / TUI 内で /permissions
+# 設定は毎回書き直す（Cline と同じ理由）。ただし、この entrypoint が書いたもの（先頭の目印行）
+# 以外の既存の config.toml は、利用者自身の設定とみなして触らない。
+# 信頼するディレクトリは作業ディレクトリ（イメージでは /workspace）。
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 CODEX_APPROVAL_POLICY="${CODEX_APPROVAL_POLICY:-on-request}"
 CODEX_STREAM_IDLE_TIMEOUT_MS="${CODEX_STREAM_IDLE_TIMEOUT_MS:-1800000}"
-if [ ! -f "$CODEX_HOME/config.toml" ]; then
+CODEX_CONFIG="$CODEX_HOME/config.toml"
+CODEX_MARKER="# managed by cline-sandbox entrypoint.sh"
+if [ -f "$CODEX_CONFIG" ] && [ "$(head -1 "$CODEX_CONFIG")" != "$CODEX_MARKER" ]; then
+    echo "[entrypoint] Warning: $CODEX_CONFIG は既存の設定なので変更しません（Codex は Ollama を使わない可能性があります）。" >&2
+    echo "[entrypoint]          CODEX_HOME を別のディレクトリにすると、そこに Ollama 用の設定を作ります。" >&2
+else
     echo "[entrypoint] Configuring Codex for Ollama ($CLINE_MODEL, approval $CODEX_APPROVAL_POLICY)..."
     mkdir -p "$CODEX_HOME"
-    cat > "$CODEX_HOME/config.toml" <<EOF
+    cat > "$CODEX_CONFIG" <<EOF
+$CODEX_MARKER
 model = "$CLINE_MODEL"
 model_provider = "ollama-local"
 model_context_window = $OLLAMA_CONTEXT_LENGTH
@@ -84,7 +117,7 @@ stream_idle_timeout_ms = $CODEX_STREAM_IDLE_TIMEOUT_MS
 request_max_retries = 0
 stream_max_retries = 0
 
-[projects."/workspace"]
+[projects."$PWD"]
 trust_level = "trusted"
 EOF
 fi

@@ -22,24 +22,46 @@ MODELS_FILE = ROOT / "scripts" / "models.json"
 WORKSPACE = ROOT / "sandbox" / "workspace"
 IMPORT_SCRIPT = ROOT / "scripts" / "import_gguf_model.sh"
 PROXY_SCRIPT = ROOT / "scripts" / "proxy.sh"
+ENTRYPOINT = ROOT / "sandbox" / "scripts" / "entrypoint.sh"
+INSTALL_SCRIPT = ROOT / "sandbox" / "scripts" / "install.sh"
+CONTAINER_MARKERS = (Path("/.dockerenv"), Path("/run/.containerenv"))
 ENTRYPOINT_MODEL = "smollm:135m"
 BACK = object()
 
 
 def load_config(path: Path = CONFIG_FILE) -> dict[str, str]:
-    """config.sh の KEY="${KEY:-値}" 行から既定値を読み、環境変数があればそちらを使う。"""
+    """config.sh の KEY="${KEY:-値}" 行から既定値を読み、環境変数があればそちらを使う。
+
+    既定値の中の $HOME などは、シェルと同じように展開する。
+    """
     config: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         match = re.fullmatch(r'(\w+)="\$\{\1:-(.*)\}"', line.strip())
         if match:
             key, default = match.groups()
-            config[key] = os.environ.get(key, default)
+            config[key] = os.environ.get(key, os.path.expandvars(default))
     return config
+
+
+def detect_backend(setting: str) -> str:
+    """podman: sandbox コンテナで動かす。native: すでにコンテナ内なので、直接動かす。"""
+    if setting in ("podman", "native"):
+        return setting
+    if setting != "auto":
+        raise RuntimeError(f"SANDBOX_BACKEND は auto / podman / native のどれかです: {setting}")
+    return "podman" if shutil.which("podman") else "native"
+
+
+def inside_container() -> bool:
+    return any(marker.exists() for marker in CONTAINER_MARKERS) or "COLAB_RELEASE_TAG" in os.environ
 
 
 CONFIG = load_config()
 IMAGE = CONFIG["SANDBOX_IMAGE"]
 MODEL_VOLUME = CONFIG["MODEL_VOLUME"]
+BACKEND = detect_backend(CONFIG["SANDBOX_BACKEND"])
+NATIVE_MODELS_DIR = Path(CONFIG["NATIVE_MODELS_DIR"])
+NATIVE_WORKSPACE = Path(CONFIG["NATIVE_WORKSPACE"]) if CONFIG["NATIVE_WORKSPACE"] else WORKSPACE
 
 
 @dataclass(frozen=True)
@@ -93,10 +115,34 @@ def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProces
 
 
 def ensure_prerequisites() -> None:
+    if BACKEND == "native":
+        ensure_native_tools()
+        NATIVE_WORKSPACE.mkdir(parents=True, exist_ok=True)
+        return
     if shutil.which("podman") is None:
         raise RuntimeError("podman が見つかりません。先にPodmanをインストールしてください。")
     if not WORKSPACE.exists():
         WORKSPACE.mkdir(parents=True)
+
+
+def ensure_native_tools() -> None:
+    """Ollama・Cline・Codex が検証済みの版で入っていなければ、install.sh で入れる。"""
+    # 子プロセス（cline --version など）に、メニューへの入力を読ませない
+    check = subprocess.run(
+        ["bash", str(INSTALL_SCRIPT), "--check"], stdin=subprocess.DEVNULL, cwd=ROOT
+    )
+    if check.returncode == 0:
+        return
+    if os.geteuid() != 0:
+        raise RuntimeError(f"root で `bash {INSTALL_SCRIPT}` を実行してから、もう一度起動してください。")
+    print("\nnative モードには Ollama・Cline CLI・Codex CLI が必要です（ネットワークから取得します）。")
+    confirmation = select_option(
+        f"{INSTALL_SCRIPT.relative_to(ROOT)} を実行してインストールしますか？",
+        [("インストールする", True), ("終了", False)],
+    )
+    if confirmation is not True:
+        raise RuntimeError("必要なツールがインストールされていません。")
+    run(["bash", str(INSTALL_SCRIPT)])
 
 
 def select_option(prompt: str, options: list[tuple[str, Option]]) -> Option | None:
@@ -162,6 +208,9 @@ def select_model() -> Model | None | object:
 
 
 def ensure_volume() -> None:
+    if BACKEND == "native":
+        NATIVE_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        return
     result = subprocess.run(
         ["podman", "volume", "inspect", MODEL_VOLUME],
         stdout=subprocess.DEVNULL,
@@ -177,38 +226,65 @@ def ensure_volume() -> None:
         )
 
 
+def container_command(
+    tag: str,
+    command: list[str],
+    *,
+    network: str = "none",
+    env: tuple[str, ...] = (),
+    mounts: tuple[str, ...] = (),
+    agent_setup: bool = False,
+) -> list[str]:
+    """モデル volume と CLINE_MODEL を渡して、sandbox の entrypoint 経由で command を実行する。
+
+    podman: 使い捨てのコンテナで実行する。
+    native: コンテナを使わず entrypoint.sh を直接実行する（mounts と network は使わない）。
+            HOME の設定が残るので、agent_setup（sandbox の起動）のとき以外は
+            Cline / Codex の設定を書き換えない（SANDBOX_SKIP_AGENT_SETUP）。
+    """
+    if BACKEND == "native":
+        setup = [] if agent_setup else ["SANDBOX_SKIP_AGENT_SETUP=1"]
+        return [
+            "env",
+            f"OLLAMA_MODELS={NATIVE_MODELS_DIR}",
+            *env,
+            *setup,
+            f"CLINE_MODEL={tag}",
+            "bash",
+            str(ENTRYPOINT),
+            *command,
+        ]
+    options = ["podman", "run", "--rm", f"--network={network}"]
+    for mount in mounts:
+        options += ["-v", mount]
+    options += ["-v", f"{MODEL_VOLUME}:/models", "-e", "OLLAMA_MODELS=/models"]
+    for item in env:
+        options += ["-e", item]
+    return options + ["-e", f"CLINE_MODEL={tag}", IMAGE, *command]
+
+
 def prepare_command(model: Model) -> list[str]:
-    command = [
-        "podman",
-        "run",
-        "--rm",
-        "--network=host",
-        "-v",
-        f"{MODEL_VOLUME}:/models",
-        "-e",
-        "OLLAMA_MODELS=/models",
-        "-e",
-        f"CLINE_MODEL={model.tag}",
-    ]
     if model.gguf is None:
-        return command + [IMAGE, "ollama", "pull", model.tag]
+        return container_command(model.tag, ["ollama", "pull", model.tag], network="host")
     source = model.gguf
-    return command + [
-        # serve 起動時の未参照 blob 掃除で、取得途中の GGUF を消されないようにする
-        "-e",
-        "OLLAMA_NOPRUNE=1",
-        "-v",
-        f"{IMPORT_SCRIPT}:/opt/import_gguf_model.sh:ro",
-        IMAGE,
-        "bash",
-        "/opt/import_gguf_model.sh",
+    script = str(IMPORT_SCRIPT) if BACKEND == "native" else "/opt/import_gguf_model.sh"
+    return container_command(
         model.tag,
-        source.url,
-        source.sha256,
-        str(source.size),
-        source.template_from,
-        *source.parameters,
-    ]
+        [
+            "bash",
+            script,
+            model.tag,
+            source.url,
+            source.sha256,
+            str(source.size),
+            source.template_from,
+            *source.parameters,
+        ],
+        network="host",
+        # serve 起動時の未参照 blob 掃除で、取得途中の GGUF を消されないようにする
+        env=("OLLAMA_NOPRUNE=1",),
+        mounts=(f"{IMPORT_SCRIPT}:/opt/import_gguf_model.sh:ro",),
+    )
 
 
 def prepare_model(model: Model) -> None:
@@ -222,22 +298,9 @@ def downloaded_models() -> set[str]:
     """Return model tags currently stored in the shared Ollama volume."""
     ensure_volume()
     result = subprocess.run(
-        [
-            "podman",
-            "run",
-            "--rm",
-            "--network=none",
-            "-v",
-            f"{MODEL_VOLUME}:/models",
-            "-e",
-            "OLLAMA_MODELS=/models",
-            "-e",
-            f"CLINE_MODEL={ENTRYPOINT_MODEL}",
-            IMAGE,
-            "ollama",
-            "list",
-        ],
+        container_command(ENTRYPOINT_MODEL, ["ollama", "list"]),
         check=True,
+        stdin=subprocess.DEVNULL,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -266,24 +329,7 @@ def delete_model(model: Model) -> None:
     if confirmation is not True:
         return
     ensure_volume()
-    run(
-        [
-            "podman",
-            "run",
-            "--rm",
-            "--network=none",
-            "-v",
-            f"{MODEL_VOLUME}:/models",
-            "-e",
-            "OLLAMA_MODELS=/models",
-            "-e",
-            f"CLINE_MODEL={model.tag}",
-            IMAGE,
-            "ollama",
-            "rm",
-            model.tag,
-        ],
-    )
+    run(container_command(model.tag, ["ollama", "rm", model.tag]))
     print(f"{model.tag} を削除しました。")
 
 
@@ -306,22 +352,8 @@ def select_downloaded_model() -> Model | None | object:
 def model_is_available(model: Model) -> bool:
     ensure_volume()
     result = subprocess.run(
-        [
-            "podman",
-            "run",
-            "--rm",
-            "--network=none",
-            "-v",
-            f"{MODEL_VOLUME}:/models",
-            "-e",
-            "OLLAMA_MODELS=/models",
-            "-e",
-            f"CLINE_MODEL={model.tag}",
-            IMAGE,
-            "ollama",
-            "show",
-            model.tag,
-        ],
+        container_command(model.tag, ["ollama", "show", model.tag]),
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -329,7 +361,15 @@ def model_is_available(model: Model) -> bool:
 
 
 def launch_command(model: Model, *, allow_network: bool = False) -> list[str]:
-    """sandbox の起動コマンド。allow_network なら許可リスト付きプロキシ経由（scripts/proxy.sh）。"""
+    """sandbox の起動コマンド。allow_network なら許可リスト付きプロキシ経由（scripts/proxy.sh）。
+
+    native では隔離が無く、作業ディレクトリ NATIVE_WORKSPACE でシェルを開く。
+    """
+    if BACKEND == "native":
+        if allow_network:
+            raise RuntimeError("native モードにはネットワーク許可モードがありません。")
+        return ["env", "-C", str(NATIVE_WORKSPACE),
+                *container_command(model.tag, [], agent_setup=True)]
     options = [
         "-it",
         "-v",
@@ -352,30 +392,48 @@ def launch(model: Model, *, allow_network: bool = False) -> None:
         raise RuntimeError(
             f"{model.tag} は未ダウンロードです。先に「モデルをダウンロード」を実行してください。"
         )
+    if BACKEND == "native":
+        print(
+            "\n★ native モードです。コンテナによる隔離はありません（ネットワーク・ファイルとも、"
+            "この環境の制限だけが効きます）。"
+            f"\n  作業ディレクトリ: {NATIVE_WORKSPACE}"
+        )
     if allow_network:
         print(
             "\n★ ネットワーク許可モードです。sandbox から sandbox/proxy/allowlist のドメインへ"
             "通信できます（それ以外・ホスト・DNS は遮断）。"
         )
-    print(f"\n{model.tag} でsandboxを起動します。終了するにはコンテナ内でexitしてください。\n")
+    where = "シェル" if BACKEND == "native" else "コンテナ"
+    print(f"\n{model.tag} でsandboxを起動します。終了するには{where}でexitしてください。\n")
     run(launch_command(model, allow_network=allow_network))
+
+
+def title() -> str:
+    if BACKEND != "native":
+        return "Cline Sandbox Launcher"
+    where = "コンテナ内" if inside_container() else "podman なし"
+    return f"Cline Sandbox Launcher（native モード: {where}のため、コンテナを使わず直接実行します）"
+
+
+def menu_options() -> list[tuple[str, str]]:
+    options = [
+        ("モデルをダウンロード", "prepare"),
+        ("sandboxを起動", "launch"),
+        ("ダウンロードしてsandboxを起動", "prepare_launch"),
+        ("sandboxを起動（ネットワーク許可: 許可リストのみ）", "launch_proxy"),
+        ("ダウンロード済みモデルを削除", "delete"),
+        ("終了", "exit"),
+    ]
+    if BACKEND == "native":
+        options = [option for option in options if option[1] != "launch_proxy"]
+    return options
 
 
 def main() -> int:
     try:
         ensure_prerequisites()
         while True:
-            action = select_option(
-                "Cline Sandbox Launcher",
-                [
-                    ("モデルをダウンロード", "prepare"),
-                    ("sandboxを起動", "launch"),
-                    ("ダウンロードしてsandboxを起動", "prepare_launch"),
-                    ("sandboxを起動（ネットワーク許可: 許可リストのみ）", "launch_proxy"),
-                    ("ダウンロード済みモデルを削除", "delete"),
-                    ("終了", "exit"),
-                ],
-            )
+            action = select_option(title(), menu_options())
             if action in (None, "exit"):
                 return 0
             if action == "delete":

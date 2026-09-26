@@ -3,45 +3,17 @@ FROM docker.io/library/ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV OLLAMA_HOST=127.0.0.1:11434
 
-# 1. 必要な基本ツールのインストール
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    git \
-    procps \
-    tar \
-    zstd \
-    && rm -rf /var/lib/apt/lists/*
+# 1〜4. 基本ツール・Node.js・Ollama・Cline CLI・Codex CLI（検証済みの版は install.sh に固定）
+#    SmolLM 135M も事前に取得する（方式B: 完全オフライン対応）。
+#    native モード（scripts/launcher.py）も同じ install.sh を使う
+COPY scripts/install.sh scripts/bun-fetch-no-timeout.js /tmp/install/
+RUN bash /tmp/install/install.sh --with-smollm && rm -rf /tmp/install
 
-# 2. Node.js 22 (LTS) のインストール
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && node --version \
-    && npm --version
-
-# 3. Ollama のインストール & SmolLM 135M の事前キャッシュ（方式B: 完全オフライン対応）
-#    （検証済みの版に固定。大きいのでエージェントより先の層に置く）
-ARG OLLAMA_VERSION=0.34.2
-RUN curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION="${OLLAMA_VERSION}" sh \
-    && ollama --version \
-    && ollama serve & \
-    until curl -s http://127.0.0.1:11434/api/tags > /dev/null 2>&1; do sleep 1; done \
-    && ollama pull smollm:135m \
-    && pkill ollama \
-    && sleep 2
-
-# 4. Cline CLI / Codex CLI のインストール（検証済みの版に固定）
-ARG CLINE_VERSION=3.0.64
-ARG CODEX_VERSION=0.156.1
-RUN npm install -g "cline@${CLINE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
-    && cline --version \
-    && codex --version
-
-# 4.1 Cline CLI (Bun) の fetch 既定 300 秒タイムアウトを Ollama 宛てだけ外す preload
-#     詳細は cpu-timeout/RESULT.md。hub daemon にも効かせるため ENV で全プロセスに渡す
-COPY scripts/bun-fetch-no-timeout.js /usr/local/lib/cline/bun-fetch-no-timeout.js
+# 4.1 Cline CLI (Bun) の fetch 既定 300 秒タイムアウトを Ollama 宛てだけ外す preload（install.sh が配置）
+#     詳細は docs/results/CPU_TIMEOUT_RESULT.md。hub daemon にも効かせるため ENV で全プロセスに渡す
 ENV BUN_OPTIONS="--preload /usr/local/lib/cline/bun-fetch-no-timeout.js"
+# Cline の自動更新（起動のたびに npm から最新版を入れる）を止め、検証済みの版に固定する
+ENV CLINE_NO_AUTO_UPDATE=1
 
 # 5. workspace ディレクトリの作成
 RUN mkdir -p /workspace

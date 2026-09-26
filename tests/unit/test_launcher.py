@@ -124,7 +124,7 @@ class ConfigAndModelsTests(unittest.TestCase):
         with patch.dict(launcher.os.environ, {}, clear=True):
             config = launcher.load_config()
 
-        self.assertEqual(config["SANDBOX_IMAGE"], "localhost/cline-sandbox:v3")
+        self.assertEqual(config["SANDBOX_IMAGE"], "localhost/cline-sandbox:v4")
         self.assertEqual(config["MODEL_VOLUME"], "ollama-models")
         self.assertIn("SANDBOX_PROXY_IMAGE", config)
 
@@ -163,6 +163,72 @@ class LaunchCommandTests(unittest.TestCase):
         self.assertNotIn("--network=none", command)
         self.assertEqual(command[-1], launcher.IMAGE)
         self.assertTrue(launcher.PROXY_SCRIPT.is_file())
+
+
+@patch.object(launcher, "BACKEND", "native")
+class NativeBackendTests(unittest.TestCase):
+    model = launcher.Model("Qwen3 8B", "qwen3:8b")
+
+    def test_model_management_runs_entrypoint_without_agent_setup(self):
+        command = launcher.prepare_command(self.model)
+
+        self.assertEqual(command[0], "env")
+        self.assertIn(f"OLLAMA_MODELS={launcher.NATIVE_MODELS_DIR}", command)
+        self.assertIn("SANDBOX_SKIP_AGENT_SETUP=1", command)
+        self.assertEqual(
+            command[-5:],
+            ["bash", str(launcher.ENTRYPOINT), "ollama", "pull", "qwen3:8b"],
+        )
+        self.assertNotIn("podman", command)
+
+    def test_gguf_import_runs_repository_script_directly(self):
+        source = launcher.GgufSource("https://example.com/m.gguf", "ab" * 32, 1, "o:t")
+        command = launcher.prepare_command(launcher.Model("M", "m:local", source))
+
+        self.assertIn("OLLAMA_NOPRUNE=1", command)
+        self.assertNotIn("-v", command)
+        entry_at = command.index(str(launcher.ENTRYPOINT))
+        self.assertEqual(command[entry_at + 1:entry_at + 3], ["bash", str(launcher.IMPORT_SCRIPT)])
+
+    def test_launch_opens_shell_in_workspace_with_agent_setup(self):
+        command = launcher.launch_command(self.model)
+
+        self.assertEqual(command[:3], ["env", "-C", str(launcher.NATIVE_WORKSPACE)])
+        self.assertNotIn("SANDBOX_SKIP_AGENT_SETUP=1", command)
+        self.assertIn("CLINE_MODEL=qwen3:8b", command)
+        self.assertEqual(command[-2:], ["bash", str(launcher.ENTRYPOINT)])
+        self.assertTrue(launcher.ENTRYPOINT.is_file())
+
+    def test_network_mode_is_not_offered(self):
+        actions = [action for _, action in launcher.menu_options()]
+
+        self.assertNotIn("launch_proxy", actions)
+        with self.assertRaises(RuntimeError):
+            launcher.launch_command(self.model, allow_network=True)
+
+
+class BackendDetectionTests(unittest.TestCase):
+    def test_explicit_backend_is_used(self):
+        self.assertEqual(launcher.detect_backend("native"), "native")
+        self.assertEqual(launcher.detect_backend("podman"), "podman")
+
+    @patch.object(launcher.shutil, "which")
+    def test_auto_uses_podman_only_when_available(self, which_mock):
+        which_mock.return_value = "/usr/bin/podman"
+        self.assertEqual(launcher.detect_backend("auto"), "podman")
+        which_mock.return_value = None
+        self.assertEqual(launcher.detect_backend("auto"), "native")
+
+    def test_unknown_backend_is_rejected(self):
+        with self.assertRaises(RuntimeError):
+            launcher.detect_backend("docker")
+
+    def test_home_in_defaults_is_expanded(self):
+        with patch.dict(launcher.os.environ, {"HOME": "/home/tester"}, clear=True):
+            config = launcher.load_config()
+
+        self.assertEqual(config["NATIVE_MODELS_DIR"], "/home/tester/.ollama/models")
+        self.assertEqual(config["SANDBOX_BACKEND"], "auto")
 
 
 if __name__ == "__main__":
