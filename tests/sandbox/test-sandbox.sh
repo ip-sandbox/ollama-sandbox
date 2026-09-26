@@ -8,13 +8,13 @@ WORKSPACE_DIR="$DIR/sandbox/workspace"
 mkdir -p "$WORKSPACE_DIR"
 
 echo "============================================================"
-echo "  CLINE SANDBOX INTEGRATION TEST SUITE (--network=none)     "
+echo "  OLLAMA SANDBOX INTEGRATION TEST SUITE (--network=none)    "
 echo "============================================================"
 
 # テストスクリプトは /tests に読み取り専用でマウントする（workspace にはコピーしない）
 
 # ホスト側にテスト用シークレットディレクトリを一時作成（ユーザー名非依存）
-SECRET_DIR=$(mktemp -d -t cline_host_secret_XXXXXX)
+SECRET_DIR=$(mktemp -d -t sandbox_host_secret_XXXXXX)
 echo "THIS_MUST_NOT_BE_VISIBLE_IN_SANDBOX" > "$SECRET_DIR/secret.txt"
 
 # 終了時または中断時に確実にクリーンアップ

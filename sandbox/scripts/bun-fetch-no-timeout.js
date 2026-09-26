@@ -8,7 +8,7 @@
 //
 // 使い方（バイナリは書き換えない。Bun は環境変数 BUN_OPTIONS を読む）:
 //   export BUN_OPTIONS="--preload /path/to/bun-fetch-no-timeout.js"
-//   （cline-sandbox:v3 イメージでは /usr/local/lib/cline/bun-fetch-no-timeout.js に置き、ENV で設定済み）
+//   （sandbox イメージでは /usr/local/lib/cline/bun-fetch-no-timeout.js に置き、ENV で設定済み）
 //   cline -P ollama -m gemma4:12b-it-qat ...
 //
 // 対象: 既定では OLLAMA_HOST（無ければ 127.0.0.1:11434）と localhost:11434 宛てだけ。

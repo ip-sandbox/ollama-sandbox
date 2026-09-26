@@ -9,7 +9,7 @@ TESTS_DIR="$DIR/tests/sandbox"
 . "$DIR/scripts/config.sh"
 
 echo "============================================================"
-echo "  CLINE SANDBOX NETWORK ALLOWLIST TEST (proxy mode)         "
+echo "  OLLAMA SANDBOX NETWORK ALLOWLIST TEST (proxy mode)        "
 echo "============================================================"
 
 # 検査 9 の対照: 既定のネットワーク（pasta）ならホストのサービスに届くこと。

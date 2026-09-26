@@ -34,7 +34,7 @@ while [ "$#" -gt 0 ]; do
 done
 case "$AGENT" in cline|codex|copilot) ;; *) rs_die "--agent cline|codex|copilot を指定してください" ;; esac
 case "$BACKEND" in podman|native) ;; *) rs_die "--backend podman|native を指定してください" ;; esac
-NATIVE_SIM="${NATIVE_SIM:-cline-native-sim}"
+NATIVE_SIM="${NATIVE_SIM:-ollama-native-sim}"
 [ "$BACKEND" = podman ] || podman container exists "$NATIVE_SIM" \
   || rs_die "$NATIVE_SIM がありません。先に research/e2e/native-sim.sh setup を実行してください"
 [ -z "$CATALOG_DUMP" ] || [ "$AGENT" = codex ] || rs_die "--codex-catalog は --agent codex 専用です"

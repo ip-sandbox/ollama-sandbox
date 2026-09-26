@@ -93,8 +93,11 @@ CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 CODEX_APPROVAL_POLICY="${CODEX_APPROVAL_POLICY:-on-request}"
 CODEX_STREAM_IDLE_TIMEOUT_MS="${CODEX_STREAM_IDLE_TIMEOUT_MS:-1800000}"
 CODEX_CONFIG="$CODEX_HOME/config.toml"
-CODEX_MARKER="# managed by cline-sandbox entrypoint.sh"
-if [ -f "$CODEX_CONFIG" ] && [ "$(head -1 "$CODEX_CONFIG")" != "$CODEX_MARKER" ]; then
+CODEX_MARKER="# managed by ollama-sandbox entrypoint.sh"
+# 旧名（cline-sandbox）の目印で作った設定も、この entrypoint のものとして書き直す
+CODEX_LEGACY_MARKER="# managed by cline-sandbox entrypoint.sh"
+if [ -f "$CODEX_CONFIG" ] && [ "$(head -1 "$CODEX_CONFIG")" != "$CODEX_MARKER" ] \
+    && [ "$(head -1 "$CODEX_CONFIG")" != "$CODEX_LEGACY_MARKER" ]; then
     echo "[entrypoint] Warning: $CODEX_CONFIG は既存の設定なので変更しません（Codex は Ollama を使わない可能性があります）。" >&2
     echo "[entrypoint]          CODEX_HOME を別のディレクトリにすると、そこに Ollama 用の設定を作ります。" >&2
 else

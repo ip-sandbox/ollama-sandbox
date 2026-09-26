@@ -1,4 +1,4 @@
-# cline-sandbox-proxy: sandbox の外向き通信を、許可リストのドメインだけに絞る HTTP(S) プロキシ
+# ollama-sandbox-proxy: sandbox の外向き通信を、許可リストのドメインだけに絞る HTTP(S) プロキシ
 #
 # 使い方は README の「ネットワーク許可モード」を参照。scripts/proxy.sh が実行時に、設定（tinyproxy.conf）と
 # 許可リストを読み取り専用でマウントする（変更にイメージの再ビルドは要らない）。

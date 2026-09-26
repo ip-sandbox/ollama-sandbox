@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive model preparation and Podman launcher for the Cline sandbox."""
+"""Interactive model preparation and Podman launcher for the Ollama sandbox."""
 
 from __future__ import annotations
 
@@ -410,9 +410,9 @@ def launch(model: Model, *, allow_network: bool = False) -> None:
 
 def title() -> str:
     if BACKEND != "native":
-        return "Cline Sandbox Launcher"
+        return "Ollama Sandbox Launcher"
     where = "コンテナ内" if inside_container() else "podman なし"
-    return f"Cline Sandbox Launcher（native モード: {where}のため、コンテナを使わず直接実行します）"
+    return f"Ollama Sandbox Launcher（native モード: {where}のため、コンテナを使わず直接実行します）"
 
 
 def menu_options() -> list[tuple[str, str]]:

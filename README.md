@@ -1,6 +1,8 @@
-# Cline CLI / Codex CLI / Copilot CLI + Ollama Podman Sandbox
+# Ollama Sandbox（Cline CLI / Codex CLI / Copilot CLI + Ollama）
 
 Linux (x86_64) 環境向けに、AIコーディングエージェント Cline CLI・Codex CLI・GitHub Copilot CLI と超小型ローカルLLM（Ollama + SmolLM 135M）を同一の Podman コンテナ内に隔離して実行するサンドボックス環境です。
+
+以前の名称は `cline-sandbox` でした。Cline 以外のエージェントも入り、中心がローカルの Ollama になったため、イメージ・プロキシ・ネットワークの名前を `ollama-sandbox` に改めました。`docs/results/` と `docs/plans/` は、検証した当時の名前（`cline-sandbox:v3` など）のままです。
 
 `--network=none` により、コンテナから外部インターネットやLANへの通信を完全に遮断しつつ、コンテナ内部の loopback (`127.0.0.1`) を介して各エージェントと Ollama 間の推論通信を成立させます。
 
@@ -27,7 +29,7 @@ Linux Host
 │
 └── Podman (--network=none)
     │
-    └── Cline Sandbox Container (cline-sandbox:v5)
+    └── Ollama Sandbox Container (ollama-sandbox:v6)
         ├── Cline CLI (v3.0.64 / Node.js 22 LTS)
         ├── Codex CLI (v0.156.1)
         ├── GitHub Copilot CLI (v1.0.88 / BYOK・オフライン)
@@ -62,6 +64,41 @@ Linux Host
 * モデルが指定内容を厳密に再現せず、要求した `hello from qwen3` ではなく `hello` を書き込んだため、内容忠実性は未検証
 
 `qwen3:8b` はイメージには焼き込んでいません。再現する場合は、モデルを保存したvolumeを `/models` にマウントし、`OLLAMA_MODELS=/models` を設定してください。
+
+## エージェントとモデルの組み合わせ
+
+hello.txt を作る実タスク（CPU 推論、`research/e2e/e2e.sh`）で確かめた結果です。所要時間は含めていません（下の「CPU 推論の所要時間」を参照）。
+
+| モデル | Cline | Codex | Copilot |
+|---|---|---|---|
+| devstral-small-2:24b-iq4_xs | ◎ | ○ | ○ |
+| gemma4:12b-it-qat | ○ | ○ | ○ |
+| gpt-oss:20b | ○ | △ apply_patch が失敗 | × apply_patch が失敗 |
+| qwen3:8b | △ 内容が不正確 | 未検証 | ○ |
+| smollm:135m | × | × | × |
+| （参考）mistral-nemo:12b ※一覧から削除 | × | × | 未検証 |
+
+記号の意味は次のとおりです。
+* ◎: 余計な手順なしに、指示どおりのファイルを作った。
+* ○: 指示どおりのファイルを作った。
+* △: 完了はしたが、途中で失敗を挟むか、結果が指示と違う。
+* ×: タスクを完了できない。
+
+各マスの補足です。
+* **devstral × Cline（◎）:** ツール呼び出しが素直で、無駄なターンがありません。
+  * Codex では、ファイル編集にシェル（`echo ... > hello.txt`）を使いました。
+  * Copilot では、1 ターン目の prefill が長いため、600 秒ごとの切断と送り直しを 4 回挟みます。送り直しは最大 5 回なので、余裕は 1 回だけです。
+* **gpt-oss:20b × Codex（△）:** ファイル編集の `apply_patch` が 4 回続けて失敗し、シェルで代わりに作って完了しました。
+  * Codex は gpt-oss を知らないため、`apply_patch` ツールを渡しません。
+  * ツールを渡しても、Ollama が Codex の要求する形式（custom ツール）を扱えません。
+  * 詳しくは `docs/results/APPLY_PATCH_RESULT.md` を参照してください。
+* **gpt-oss:20b × Copilot（×）:** 同じく `apply_patch` の問題で、1 回目の編集が失敗した時点で終了します。
+  * Copilot は `apply_patch` を custom ツールとして渡しますが、モデルは JSON で呼び、Copilot に拒否されます。
+  * 続く送信を Ollama が 400（`unknown input item type: "custom_tool_call"`）で拒否します。
+  * 詳しくは `docs/results/COPILOT_RESULT.md` を参照してください。
+* **qwen3:8b × Cline（△）:** 初期の検証で、ツールでファイルは作れましたが、中身が `hello` だけでした。
+* **smollm:135m:** ツール呼び出しに対応していないため、どのエージェントでも使えません。Ollama との疎通確認用です。
+* **native モード:** Copilot の行（devstral・gemma4・qwen3・gpt-oss）は、コンテナ版と native モードの両方で同じ結果でした。
 
 ## モデルの準備とTUIランチャー
 
@@ -106,7 +143,7 @@ python3 -m unittest discover -s tests/unit -v
 ### 1. サンドボックスコンテナのビルド
 
 ```bash
-podman build -t cline-sandbox:v5 -f sandbox/Containerfile sandbox
+podman build -t ollama-sandbox:v6 -f sandbox/Containerfile sandbox
 ```
 
 ※イメージ内には初期疎通用の `smollm:135m` が焼き込まれています。実用モデルはTUIランチャーでnamed volumeへ事前ダウンロードしてください。
@@ -269,7 +306,7 @@ devstral は Cline の 1 ターン目が約 19 分で、既定のリクエスト
 | `docs/results/APPLY_PATCH_RESULT.md` | Codex + Ollama で apply_patch が失敗する原因 |
 | `docs/results/DEVSTRAL_RESULT.md` | Devstral Small 2 24B IQ4_XS の取り込みと検証 |
 | `docs/results/COPILOT_RESULT.md` | Copilot CLI の組み込み（タイムアウトの実測）と、各モデル × コンテナ / native の検証 |
-| `docs/plans/` | 各作業の計画書 |
+| `docs/plans/` | 各作業の計画書（名前は当時のまま） |
 | `research/README.md` | 検証スクリプトの使い方（旧 `cpu-timeout/` からの対応表あり） |
 
 ---

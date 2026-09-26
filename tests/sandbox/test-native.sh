@@ -11,7 +11,7 @@ DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 SIM="$DIR/research/e2e/native-sim.sh"
 
 echo "============================================================"
-echo "  NATIVE MODE INTEGRATION TEST SUITE (cline-native-sim)     "
+echo "  NATIVE MODE INTEGRATION TEST SUITE (ollama-native-sim)    "
 echo "============================================================"
 
 # launcher.py を native モードで読み込み、ワークスペース（/workspace）で Python の文を実行する

@@ -17,7 +17,7 @@ MODEL_ARGS=(-v "$MODEL_VOLUME:/models" -e OLLAMA_MODELS=/models)
 
 # SANDBOX_NETWORK=proxy で、許可リストのドメインにだけ出られるネットワーク許可モードになる（scripts/proxy.sh）
 if [ "${SANDBOX_NETWORK:-none}" = proxy ]; then
-    echo "=== Starting Cline Sandbox (network: allowlist proxy) ==="
+    echo "=== Starting Ollama Sandbox (network: allowlist proxy) ==="
     exec bash "$DIR/scripts/proxy.sh" run -it \
         -v "$WORKSPACE_DIR:/workspace:rw" \
         "${MODEL_ARGS[@]}" \
@@ -25,7 +25,7 @@ if [ "${SANDBOX_NETWORK:-none}" = proxy ]; then
         "$@"
 fi
 
-echo "=== Starting Cline Sandbox (--network=none) ==="
+echo "=== Starting Ollama Sandbox (--network=none) ==="
 podman run --rm -it \
     --network=none \
     -v "$WORKSPACE_DIR:/workspace:rw" \

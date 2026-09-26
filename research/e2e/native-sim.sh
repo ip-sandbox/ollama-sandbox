@@ -15,7 +15,7 @@
 set -euo pipefail
 . "$(cd "$(dirname "$0")/.." && pwd)/env.sh"
 
-NATIVE_SIM="${NATIVE_SIM:-cline-native-sim}"
+NATIVE_SIM="${NATIVE_SIM:-ollama-native-sim}"
 
 case "${1:-}" in
   setup)
